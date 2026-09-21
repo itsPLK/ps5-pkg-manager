@@ -2,6 +2,13 @@ import React from 'react';
 import BlurIcon from '../../BlurIcon';
 import { formatBytes, formatVersion } from '../../utils/formatters';
 
+function getPlatform(titleId) {
+  const normalizedTitleId = (titleId || '').trim().toUpperCase();
+  if (normalizedTitleId.startsWith('PPSA')) return 'PS5';
+  if (normalizedTitleId.startsWith('CUSA')) return 'PS4';
+  return null;
+}
+
 export default function PackageGridView({ groupedTitles, searchQuery, onSearch, sortBy, onSort, onOpenTitle, selectedDrive, onBack, settings, installerStatus, loadingPackages, packages = [] }) {
   const setSearchQuery = onSearch;
   const setSortBy = onSort;
@@ -104,6 +111,7 @@ export default function PackageGridView({ groupedTitles, searchQuery, onSearch, 
                   const areAllDlcsInstalled = group.areAllDlcsInstalled;
                   const hasNewDlc = group.hasNewDlc;
                   const isEverythingInstalled = group.isEverythingInstalled;
+                  const platform = getPlatform(group.title_id);
 
                   return (
                     <div
@@ -149,6 +157,17 @@ export default function PackageGridView({ groupedTitles, searchQuery, onSearch, 
                           {group.isBaseInstalled && (
                             <span className="absolute top-2 left-2 z-20 px-2 py-0.5 rounded-[2px] bg-emerald-600/90 text-[10px] font-bold text-white border border-emerald-400/30">
                               INSTALLED
+                            </span>
+                          )}
+
+                          {/* Platform badge from the title ID */}
+                          {platform && (
+                            <span className={`absolute top-2 right-2 z-20 px-2 py-0.5 rounded-[2px] text-[10px] font-bold border pointer-events-none ${
+                              platform === 'PS5'
+                                ? 'bg-white text-black border-white'
+                                : 'bg-zinc-900 text-zinc-200 border-zinc-600'
+                            }`}>
+                              {platform}
                             </span>
                           )}
 
