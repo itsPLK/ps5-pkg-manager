@@ -1,4 +1,5 @@
 import http from 'http';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -537,13 +538,17 @@ let installerStatus = {
 
 let installInterval = null;
 
+// Direct-install mock session (memory-backed like the device RAM ring).
+const WS_MOCK_PORT = 8846;
+const mockUpload = { active: false, id: '', filename: '', total: 0, received: 0, buf: null };
+
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   setCors(res);
 
   if (req.method === 'OPTIONS') {
@@ -668,9 +673,9 @@ const server = http.createServer((req, res) => {
         const pkg = examplePkgs.find(p => p.path === targetPath) || {
           path: targetPath,
           title_id: 'PPSA01001',
-          title_name: 'Package',
+          title_name: targetPath && targetPath.startsWith('live:') ? mockUpload.filename || 'Live upload' : 'Package',
           content_id: 'EP0000-PPSA01001_00-APP',
-          file_size: 100000000
+          file_size: targetPath && targetPath.startsWith('live:') && mockUpload.total > 0 ? mockUpload.total : 100000000
         };
 
         if (installerStatus.is_installing) {
@@ -877,6 +882,78 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // 12b. Direct-install live sessions (memory-backed mock of the RAM-only
+  // live path: no files, Buffer holds bytes like the device ring).
+  if (pathname.startsWith('/api/upload/')) {
+    const readBody = () => new Promise((resolve) => {
+      let b = '';
+      req.on('data', (c) => { b += c; });
+      req.on('end', () => resolve(b));
+    });
+    const liveUri = () => 'live:' + mockUpload.id;
+    if (req.method === 'POST' && pathname === '/api/upload/init') {
+      const body = await readBody();
+      let parsed = {};
+      try { parsed = JSON.parse(body || '{}'); } catch (e) {}
+      const total = Number(parsed.total) || 0;
+      const filename = String(parsed.filename || '').split('/').pop();
+      if (!filename || !(total > 0) || total > 2 * 1024 * 1024 * 1024) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'filename and total required' }));
+        return;
+      }
+      if (mockUpload.active && (mockUpload.filename !== filename || mockUpload.total !== total)) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Another upload is active' }));
+        return;
+      }
+      if (!mockUpload.active) {
+        mockUpload.active = true;
+        mockUpload.id = crypto.randomBytes(8).toString('hex');
+        mockUpload.filename = filename;
+        mockUpload.total = total;
+        mockUpload.received = 0;
+        mockUpload.buf = Buffer.alloc(total);
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, session_id: mockUpload.id, offset: mockUpload.received, ws_port: WS_MOCK_PORT }));
+      return;
+    }
+    if (req.method === 'GET' && pathname === '/api/upload/status') {
+      const headNeed = Math.min(1024 * 1024, mockUpload.total);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        active: mockUpload.active,
+        session_id: mockUpload.id, filename: mockUpload.filename,
+        total: mockUpload.total, received: mockUpload.received,
+        served: mockUpload.received,
+        complete: mockUpload.active && mockUpload.received === mockUpload.total,
+        header_ready: mockUpload.active && mockUpload.received >= headNeed && headNeed > 0
+      }));
+      return;
+    }
+    if (req.method === 'POST' && pathname === '/api/upload/finish') {
+      const nsegs = Math.ceil(mockUpload.total / (1024 * 1024));
+      const allIn = mockUpload.present && mockUpload.present.size >= nsegs;
+      if (!mockUpload.active || !allIn) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Upload incomplete' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, path: liveUri() }));
+      return;
+    }
+    if (req.method === 'POST' && pathname === '/api/upload/cancel') {
+      mockUpload.active = false;
+      mockUpload.received = 0;
+      mockUpload.buf = null;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+      return;
+    }
+  }
+
   if ((req.method === 'GET' || req.method === 'HEAD') && pathname === '/cache.appcache') {
     res.writeHead(200, { 'Content-Type': 'text/cache-manifest; charset=utf-8' });
     if (req.method === 'HEAD') res.end();
@@ -931,6 +1008,137 @@ const server = http.createServer((req, res) => {
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not found' }));
 });
+
+// Mock WS listener on :8846 (mirrors ws_upload.c framing: masked client
+// frames, unmasked text acks, in-order binary chunks at mockUpload.received).
+function wsSendText(sock, obj) {
+  const payload = Buffer.from(JSON.stringify(obj));
+  const n = payload.length;
+  let hdr;
+  if (n < 126) hdr = Buffer.from([0x81, n]);
+  else if (n < 65536) { hdr = Buffer.alloc(4); hdr[0] = 0x81; hdr[1] = 126; hdr.writeUInt16BE(n, 2); }
+  else { hdr = Buffer.alloc(10); hdr[0] = 0x81; hdr[1] = 127; hdr.writeBigUInt64BE(BigInt(n), 2); }
+  sock.write(Buffer.concat([hdr, payload]));
+}
+
+server.on('upgrade', mockWsUpgrade);
+
+const wsMock = http.createServer();
+wsMock.on('upgrade', mockWsUpgrade);
+wsMock.listen(WS_MOCK_PORT, '0.0.0.0');
+
+function mockWsUpgrade(req, sock) {
+  const url = new URL(req.url, 'http://127.0.0.1:8846');
+  const key = req.headers['sec-websocket-key'];
+  const okWs = (req.headers.upgrade || '').toLowerCase() === 'websocket';
+  if (url.pathname !== '/ws/upload' || !okWs || !key) {
+    sock.write('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+    sock.destroy();
+    return;
+  }
+  const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+  sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
+
+  let buf = Buffer.alloc(0);
+  let textFrag = '';
+  let textOn = false;
+  let fragOp = 0;
+  let pendingSeg = -1;
+  let fragBin = [];
+  sock.on('data', (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
+    for (;;) {
+      if (buf.length < 2) return;
+      const b0 = buf[0], b1 = buf[1];
+      const opcode = b0 & 0x0f, fin = !!(b0 & 0x80), masked = !!(b1 & 0x80);
+      let plen = b1 & 0x7f, hlen = 2;
+      if (plen === 126) {
+        if (buf.length < 4) return;
+        plen = buf.readUInt16BE(2); hlen = 4;
+      } else if (plen === 127) {
+        if (buf.length < 10) return;
+        plen = Number(buf.readBigUInt64BE(2)); hlen = 10;
+      }
+      if (!masked || buf.length < hlen + 4 + plen) return;
+      const mask = buf.slice(hlen, hlen + 4);
+      const pay = buf.slice(hlen + 4, hlen + 4 + plen);
+      for (let i = 0; i < pay.length; i++) pay[i] ^= mask[i % 4];
+      buf = buf.slice(hlen + 4 + plen);
+      if (opcode === 0x8) { sock.end(); return; }
+      if (opcode === 0x9) { sock.write(Buffer.from([0x8a, 0x00])); continue; }
+      if (opcode === 0xa) continue;
+      if (opcode === 0x1 || (opcode === 0x0 && fragOp === 1)) {
+        if (opcode === 0x1) { textFrag = ''; textOn = true; fragOp = 1; }
+        if (!textOn) { sock.end(); return; }
+        textFrag += pay.toString('utf8');
+        if (!fin) continue;
+        textOn = false;
+        let msg = {};
+        try { msg = JSON.parse(textFrag); } catch (e) { wsSendText(sock, { op: 'error', error: 'bad json' }); continue; }
+        if (msg.op === 'init') {
+          const total = Number(msg.total) || 0;
+          const filename = String(msg.filename || '').split('/').pop();
+          if (!filename || !(total > 0) || total > 2 * 1024 * 1024 * 1024) { wsSendText(sock, { op: 'error', error: 'init needs filename+total' }); continue; }
+          if (!mockUpload.active) {
+            mockUpload.active = true;
+            mockUpload.id = crypto.randomBytes(8).toString('hex');
+            mockUpload.filename = filename;
+            mockUpload.total = total;
+            mockUpload.received = 0;
+            mockUpload.buf = Buffer.alloc(total);
+          }
+          wsSendText(sock, { op: 'ready', session_id: mockUpload.id, offset: mockUpload.received });
+        } else if (msg.op === 'status') {
+          wsSendText(sock, { active: mockUpload.active, total: mockUpload.total, received: mockUpload.received });
+        } else if (msg.op === 'finish') {
+          if (mockUpload.active && mockUpload.received === mockUpload.total) {
+            wsSendText(sock, { op: 'complete', path: 'live:' + mockUpload.id });
+          } else {
+            wsSendText(sock, { op: 'error', error: 'incomplete', received: mockUpload.received, total: mockUpload.total });
+          }
+        } else if (msg.op === 'cancel') {
+          mockUpload.active = false;
+          mockUpload.received = 0;
+          mockUpload.buf = null;
+          mockUpload.present = null;
+          wsSendText(sock, { op: 'cancelled' });
+        } else if (msg.op === 'seg') {
+          const S = Number(msg.seg);
+          pendingSeg = Number.isInteger(S) && S >= 0 ? S : -1;
+        } else {
+          wsSendText(sock, { op: 'error', error: 'unknown op' });
+        }
+      } else if (opcode === 0x2 || (opcode === 0x0 && fragOp === 2)) {
+        if (opcode === 0x2) { fragOp = 2; pendingSeg = -1; fragBin = []; }
+        if (!mockUpload.active || !mockUpload.buf) { wsSendText(sock, { op: 'error', error: 'no session' }); continue; }
+        fragBin.push(pay);
+        if (!fin) continue;
+        // Whole message reassembled: apply to the named segment.
+        const msg = Buffer.concat(fragBin);
+        fragBin = [];
+        const SEG = 1024 * 1024;
+        const total = mockUpload.total;
+        const nsegs = Math.ceil(total / SEG);
+        const S = pendingSeg;
+        const expLen = S < nsegs - 1 ? SEG : total - S * SEG;
+        if (S < 0 || S >= nsegs || msg.length !== expLen) {
+          wsSendText(sock, { op: 'error', error: 'bad segment' });
+          continue;
+        }
+        msg.copy(mockUpload.buf, S * SEG);
+        if (!mockUpload.present) mockUpload.present = new Set();
+        mockUpload.present.add(S);
+        // Contiguous run from 0 (resume offset semantics).
+        let contig = 0;
+        while (mockUpload.present.has(contig)) contig++;
+        const lastLen = total - (nsegs - 1) * SEG;
+        mockUpload.received = 0;
+        for (let s = 0; s < contig; s++) mockUpload.received += (s < nsegs - 1 ? SEG : lastLen);
+        wsSendText(sock, { op: 'ack', seg: S });
+      }
+    }
+  });
+}
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`=======================================================`);

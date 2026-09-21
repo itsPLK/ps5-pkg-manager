@@ -62,6 +62,8 @@ typedef struct {
 typedef struct {
     int is_multipart;
     int is_smb;
+    int is_live;           /* NEW: RAM live session (ws_stream.c), no file */
+    void *live;            /* ws_stream session handle (global singleton) */
     void *smb_session;
     uint32_t current_part;
     uint32_t total_parts;

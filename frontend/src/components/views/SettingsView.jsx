@@ -119,6 +119,44 @@ export default function SettingsView({ settings, onSaveSettings, onClose, onOpen
                   </button>
                 </div>
 
+                {/* Stream Debug Logging Card */}
+                <div className="rounded-[2px] bg-[#141520] border border-white/10 p-6 space-y-5">
+                  <div className="flex items-center space-x-3 pb-3 border-b border-white/10">
+                    <div className="w-10 h-10 rounded-[2px] bg-amber-600/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <polyline points="4 17 10 11 4 5" />
+                        <line x1="12" y1="19" x2="20" y2="19" />
+                      </svg>
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-white">Developer</h3>
+                      <p className="text-xs text-zinc-400">Debug &amp; diagnostics</p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onSaveSettings({ ...safeSettings, pkg_install_debug: !safeSettings.pkg_install_debug })}
+                    className="w-full bg-white/5 hover:bg-white/10 border border-white/10 rounded-[2px] ps5-focus-item p-4 flex items-center justify-between transition-colors cursor-pointer text-left"
+                  >
+                    <div className="min-w-0 flex-1 mr-4">
+                      <span className="text-sm font-semibold text-white block">Package install debug logging</span>
+                      <span className="text-xs text-zinc-400 block mt-1">
+                        Record every stream server connection and byte-range request to a timestamped log file in /data/pkgmgr/. Use this to capture the exact PS5 download pattern for mock/replay testing.
+                      </span>
+                    </div>
+                    <div className={`w-6 h-6 rounded-[2px] border flex items-center justify-center shrink-0 transition-colors ${
+                      safeSettings.pkg_install_debug
+                        ? 'bg-amber-600 border-amber-500 text-white'
+                        : 'bg-black/40 border-white/20 text-transparent'
+                    }`}>
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </div>
+                  </button>
+                </div>
+
                 {/* Samba (SMB) Shares Card */}
                 <div className="rounded-[2px] bg-[#141520] border border-white/10 p-6 space-y-4">
                   <div className="flex items-center justify-between pb-3 border-b border-white/10">

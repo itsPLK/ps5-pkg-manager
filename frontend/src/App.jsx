@@ -42,6 +42,7 @@ import TitleDetailView from './components/views/TitleDetailView';
 import PackageGridView from './components/views/PackageGridView';
 import DrivesView from './components/views/DrivesView';
 
+import DirectInstallView from './components/views/DirectInstallView';
 import DonateModal from './components/modals/DonateModal';
 import ClearCacheModal from './components/modals/ClearCacheModal';
 import SmbShareModal from './components/modals/SmbShareModal';
@@ -72,6 +73,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('date-desc');
   const [selectedTitleId, setSelectedTitleId] = useState(null);
+  const [showDirectInstall, setShowDirectInstall] = useState(false);
 
   const selectedDriveRef = useRef(selectedDrive);
   selectedDriveRef.current = selectedDrive;
@@ -483,6 +485,8 @@ export default function App() {
     handleCloseSettings,
     handleOpenSmb,
     handleCloseSmb,
+    handleOpenDirectInstall,
+    handleCloseDirectInstall,
   } = useHistoryNavigation({
     setSelectedDrive,
     selectedDriveRef,
@@ -490,6 +494,7 @@ export default function App() {
     selectedTitleIdRef,
     setShowSettings,
     setShowSmbPage,
+    setShowDirectInstall,
     drives,
     fetchPackagesForDrive,
     fetchDrives,
@@ -699,7 +704,18 @@ export default function App() {
         storage={storage}
         showSettings={showSettings}
         showSmbPage={showSmbPage}
+        showDirectInstall={showDirectInstall}
+        onDirectInstallClick={() => {
+          if (showDirectInstall) {
+            handleCloseDirectInstall();
+            return;
+          }
+          handleOpenDirectInstall();
+        }}
         onSettingsClick={() => {
+          if (showDirectInstall) {
+            handleCloseDirectInstall();
+          }
           if (showSmbPage) {
             handleCloseSmb();
             return;
@@ -718,7 +734,12 @@ export default function App() {
 
       {/* Main Container */}
       <main className="w-full px-4 py-4 flex-1 space-y-6">
-        {showSmbPage ? (
+        {showDirectInstall ? (
+          <DirectInstallView
+            onBack={handleCloseDirectInstall}
+            showToast={showToast}
+          />
+        ) : showSmbPage ? (
           <SmbManagementView
             settings={settings}
             onBack={handleCloseSmb}

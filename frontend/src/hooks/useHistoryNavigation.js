@@ -6,6 +6,7 @@ export function getRouteFromHash(hash) {
   if (!clean) return { type: 'drives' };
   if (clean === 'settings') return { type: 'settings' };
   if (clean === 'smb') return { type: 'smb' };
+  if (clean === 'direct-install') return { type: 'direct-install' };
   if (clean.startsWith('drive/')) {
     const driveId = decodeURIComponent(clean.slice(6));
     return { type: 'drive', driveId };
@@ -21,6 +22,7 @@ export function formatHash(route) {
   if (!route || route.type === 'drives') return '#/';
   if (route.type === 'settings') return '#/settings';
   if (route.type === 'smb') return '#/smb';
+  if (route.type === 'direct-install') return '#/direct-install';
   if (route.type === 'drive') return `#/drive/${encodeURIComponent(route.driveId || '__all__')}`;
   if (route.type === 'title') return `#/title/${encodeURIComponent(route.titleId)}`;
   return '#/';
@@ -70,6 +72,12 @@ export function getHistoryChain(route) {
       route
     ];
   }
+  if (route.type === 'direct-install') {
+    return [
+      { type: 'drives' },
+      route
+    ];
+  }
   return [{ type: 'drives' }];
 }
 
@@ -105,6 +113,8 @@ export function useHistoryNavigation(props) {
     setShowSettings,
     showSmbPage,
     setShowSmbPage,
+    showDirectInstall,
+    setShowDirectInstall,
     drives,
     fetchPackagesForDrive,
     fetchDrives,
@@ -149,6 +159,12 @@ export function useHistoryNavigation(props) {
   useEffect(() => {
     showSmbPageRef.current = showSmbPage;
   }, [showSmbPage]);
+
+  const showDirectInstallRef = useRef(showDirectInstall);
+  showDirectInstallRef.current = showDirectInstall;
+  useEffect(() => {
+    showDirectInstallRef.current = showDirectInstall;
+  }, [showDirectInstall]);
 
   const isInstallingRef = useRef(false);
   isInstallingRef.current = Boolean(
@@ -198,6 +214,7 @@ export function useHistoryNavigation(props) {
   ]);
 
   const getActiveViewType = useCallback(() => {
+    if (showDirectInstallRef.current) return 'direct-install';
     if (showSmbPageRef.current) return 'smb';
     if (showSettingsRef.current) return 'settings';
     if (selectedTitleIdRef.current) return 'title';
@@ -268,18 +285,26 @@ export function useHistoryNavigation(props) {
       if (target.type === 'smb') {
         setShowSettings(false);
         setShowSmbPage(true);
+        setShowDirectInstall(false);
+      } else if (target.type === 'direct-install') {
+        setShowSmbPage(false);
+        setShowSettings(false);
+        setShowDirectInstall(true);
       } else if (target.type === 'settings') {
         setShowSmbPage(false);
         setShowSettings(true);
+        setShowDirectInstall(false);
         if (fetchCacheStats) fetchCacheStats();
       } else if (target.type === 'title') {
         setShowSettings(false);
         setShowSmbPage(false);
+        setShowDirectInstall(false);
         setSelectedTitleId(target.titleId);
         selectedTitleIdRef.current = target.titleId;
       } else if (target.type === 'drive') {
         setShowSettings(false);
         setShowSmbPage(false);
+        setShowDirectInstall(false);
         if (selectedTitleIdRef.current) {
           const currentY = window.scrollY || window.pageYOffset || document.documentElement.scrollTop;
           detailScrollPositionRef.current = currentY;
@@ -304,6 +329,7 @@ export function useHistoryNavigation(props) {
         // 'drives'
         setShowSettings(false);
         setShowSmbPage(false);
+        setShowDirectInstall(false);
         setSelectedTitleId(null);
         selectedTitleIdRef.current = null;
         setSelectedDrive(null);
@@ -329,6 +355,7 @@ export function useHistoryNavigation(props) {
     setSelectedTitleId,
     setShowSettings,
     setShowSmbPage,
+    setShowDirectInstall,
     showToast,
     detailScrollPositionRef,
     selectedDriveRef,
@@ -486,6 +513,32 @@ export function useHistoryNavigation(props) {
     }
   }, [setShowSettings, setShowSmbPage]);
 
+  const handleOpenDirectInstall = useCallback(() => {
+    setShowSmbPage(false);
+    setShowSettings(false);
+    setShowDirectInstall(true);
+    window.scrollTo(0, 0);
+    const route = { type: 'direct-install' };
+    currentRouteRef.current = route;
+    writeHistory(route, false);
+  }, [setShowDirectInstall, setShowSettings, setShowSmbPage]);
+
+  const handleCloseDirectInstall = useCallback(() => {
+    if (window.history && showDirectInstallRef.current) {
+      window.history.back();
+    } else {
+      setShowDirectInstall(false);
+      let prevRoute = { type: 'drives' };
+      if (selectedTitleIdRef.current) {
+        prevRoute = { type: 'title', titleId: selectedTitleIdRef.current, driveId: selectedDriveRef.current?.id || '__all__' };
+      } else if (selectedDriveRef.current) {
+        prevRoute = { type: 'drive', driveId: selectedDriveRef.current.id || '__all__' };
+      }
+      currentRouteRef.current = prevRoute;
+      writeHistory(prevRoute, true);
+    }
+  }, [selectedDriveRef, selectedTitleIdRef, setShowDirectInstall]);
+
   return {
     handleSelectDrive,
     handleBackToDrives,
@@ -495,5 +548,7 @@ export function useHistoryNavigation(props) {
     handleCloseSettings,
     handleOpenSmb,
     handleCloseSmb,
+    handleOpenDirectInstall,
+    handleCloseDirectInstall,
   };
 }

@@ -83,6 +83,19 @@ void pkg_parser_parse_param_sfo(const uint8_t *sfo, size_t sfo_len, char *out_ti
 int pkg_parser_parse(const char *file_path, pkg_detail_t *out);
 
 /**
+ * Parses PKG metadata from an in-memory prefix (live RAM session): same
+ * fields as pkg_parser_parse but bounded to [data, data+data_len) instead
+ * of pread(). Anything addressed outside the prefix fails closed (with a
+ * stage code in *out_stage when non-NULL: 1 short header, 2 no CNT,
+ * 3 CNT header, 4 content_id, 5 entry header, 6 table past prefix).
+ * Icon extraction is skipped (has_icon = 0); total sizes come from
+ * total_size. Purely additive: the file-based parser above is untouched.
+ */
+int pkg_parser_parse_mem(const uint8_t *data, size_t data_len,
+                         uint64_t total_size, const char *filename,
+                         pkg_detail_t *out, int *out_stage);
+
+/**
  * Extracts raw icon bytes from the PKG file.
  * Allocates *out_data with malloc, which caller must free().
  * Returns 0 on success, negative on error.

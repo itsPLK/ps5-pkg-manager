@@ -20,6 +20,7 @@ export function useSettings(props) {
       move_installed_to_end: true,
       fade_installed_packages: true,
       all_sources_mode: false,
+      pkg_install_debug: false,
       smb_shares: []
     };
   });

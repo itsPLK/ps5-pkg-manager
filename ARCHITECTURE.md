@@ -236,6 +236,55 @@ When invoking `sceAppInstUtilInstallByPackage`, `pkg_metadata_t` is populated as
 - **`content_id`**: Passed as an empty string `""`; the system installer reads the initial package header from the stream to populate `pkg_info.content_id`.
 - **`ex_uri`**, **`playgo_scenario_id`**, **`icon_url`**: Passed as empty strings `""`.
 
+### Host-Side PS5 Stream Simulator
+
+To develop install methods (websocket client, direct stream creation) without a
+console, the PS5's request pattern against the stream server is reproduced on
+the host. The pattern, reverse-engineered from the captures in
+`.for_reference/stream_debug/`, has three phases:
+
+1. **Header acquisition** — a burst of short-lived connections, each re-reading
+   the first 64 KiB (`Range: bytes=0-65535`) so the installer can parse /
+   re-validate the package header.
+2. **Sidecar CRC probe** — a single Range-less GET of
+   `<content_id>.crc` that must return `404` when there is no companion file.
+3. **Bulk transfer** — two parallel long-lived connections serving contiguous
+   16 MiB byte-ranges across `[65536, end)` in an A/B ping-pong.
+
+Every request carries the query the console appends
+(`?product=0287&serverIpAddr=127.0.0.1&r=00000000`) against `:8845`.
+
+The pure client half is `tests/ps5_sim.c` (raw HTTP/1.1, no dependency on the
+server). `tests/test_stream_sim.c` pairs it against the real
+`src/stream_server.c` and asserts the model holds; it is part of `make test`.
+The standalone CLI (`tools/ps5_installer_sim.c`, launched via
+`tools/run_stream_sim.sh`) can either start its own local server or point the
+same replay at any live server — exactly the shape a future websocket / remote
+install method needs. A correct HTTP/1.1 keep-alive reader is essential here:
+absorbing body bytes into the header buffer desyncs a persistent connection and
+makes the exact body read block on bytes the server already sent.
+
+### Direct-Install Upload Path (implemented, see PLAN.md)
+
+```
+LAN browser (DirectInstallView) --ws://:8846--> ws_upload.c --RAM ring-->
+virtual_stream ("live:<id>") --:8845--> installer.c (existing worker) --> system installer
+```
+
+`src/ws_upload.c` is transport only; `src/ws_stream.c` owns the bytes
+(1 MB pinned header + 64 MB ring, `ws_live_*` symbols, no load-time side
+effects, abort/timeout on every wait). The only touch points in existing
+code are additive: a `live:` scheme branch in `virtual_stream_open`/`read`
+(`multipart.c`), one `pkg_parser_parse_mem()` function reusing the in-file
+sub-parsers, one `installer_start_live()` entry plus abort/destroy hooks
+(`installer.c`), and a guarded `/api/upload/` REST branch plus `live:` URI
+routing in `/api/install` (`http_server.c`). `src/stream_server.c` has
+zero diff, so the pull contract verified by `test_stream_sim` still holds
+byte-for-byte. Host proof: `test_ws_stream`, `test_parse_mem`,
+`test_ws_upload`, `test_direct_install_e2e`, and
+`tools/run_direct_install_sim.sh --demo` (fragmented socket push racing
+the standard `ps5_sim` pull replay, byte-exact).
+
 ---
 
 ## 6. Package Parser & Metadata Engine (`pkg_parser.c`)

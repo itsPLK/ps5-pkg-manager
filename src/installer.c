@@ -12,6 +12,9 @@
 #include "notification.h"
 #include "app_info.h"
 #include "stream_server.h"
+#include "stream_debug_log.h"
+#include "pkg_cache.h"
+#include "ws_stream.h" /* NEW: live RAM sessions (additive; worker below unchanged) */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -799,6 +802,26 @@ static void *stream_installer_worker(void *arg) {
         return NULL;
     }
 
+    /* Activate stream debug file logging if the setting is enabled.
+     * Opens after the stream server is up so total_size is finalized. */
+    {
+        app_settings_t dbg_settings;
+        pkg_cache_get_settings(&dbg_settings);
+        if (dbg_settings.pkg_install_debug) {
+            char dbg_tid[32] = {0}, dbg_cid[64] = {0}, dbg_kind[16] = {0};
+            uint64_t dbg_total = 0;
+            pthread_mutex_lock(&g_installer_mutex);
+            strncpy(dbg_tid, g_status.title_id, sizeof(dbg_tid) - 1);
+            strncpy(dbg_cid, g_status.content_id, sizeof(dbg_cid) - 1);
+            strncpy(dbg_kind, g_status.pkg_kind, sizeof(dbg_kind) - 1);
+            dbg_total = g_status.total_bytes;
+            pthread_mutex_unlock(&g_installer_mutex);
+            stream_debug_log_open(dbg_tid, dbg_cid, dbg_kind, worker_pkg_path, dbg_total);
+            /* Also enable verbose stream_server console logging when debug is active */
+            stream_server_set_debug(1);
+        }
+    }
+
     /* Unique URI per install: the system remembers recently used stream URLs
        across payload restarts (reusing package-1.pkg after a redeploy gets
        rejected), so key by wall-clock timestamp plus a per-install sequence
@@ -894,7 +917,9 @@ static void *stream_installer_worker(void *arg) {
     if (g_cancel_stream || !g_monitor_running) {
         /* Canceled or shutting down during retry waits: cancel/shutdown owns
            the status, just stop the server and exit. */
+        ws_live_abort();
         stream_server_session_stop();
+        ws_live_destroy();
         return NULL;
     }
 
@@ -906,7 +931,9 @@ static void *stream_installer_worker(void *arg) {
         strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
         pthread_mutex_unlock(&g_installer_mutex);
         ps5_notify("Install error: 0x%08X (%s)", ret, rname ? rname : "unknown");
+        ws_live_abort();
         stream_server_session_stop();
+        ws_live_destroy();
         return NULL;
     }
 
@@ -1150,7 +1177,12 @@ static void *stream_installer_worker(void *arg) {
     pthread_mutex_unlock(&g_installer_mutex);
 #endif
 
+    /* NEW: release the live RAM session (noop for disk installs). Abort
+     * first so any reader blocked in ws_live_read wakes before/during
+     * the stop's vs_refs drain; destroy frees the ring. */
+    ws_live_abort();
     stream_server_session_stop();
+    ws_live_destroy();
     return NULL;
 }
 
@@ -1383,6 +1415,150 @@ int installer_start(const char *pkg_path) {
     return 0;
 }
 
+/* NEW: start an install from a live RAM session ("live:<id>", Direct
+ * Install without any disk spool). Mirrors installer_start's checks and
+ * commits, but metadata comes from pkg_parser_parse_mem over the uploaded
+ * header cache and total size comes from the browser. Multi-part is
+ * refused (live pushes are single packages). The existing background
+ * worker runs unchanged: "live:<id>" flows through to
+ * stream_server_session_start -> virtual_stream_open's live: scheme. */
+int installer_start_live(const char *live_uri) {
+    if (!live_uri || strncmp(live_uri, "live:", 5) != 0) {
+        return -1;
+    }
+    const char *sid = live_uri + 5;
+    if (sid[0] == '\0' || !ws_live_check_id(sid)) {
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_installer_mutex);
+    int already = g_status.is_installing;
+    pthread_mutex_unlock(&g_installer_mutex);
+    if (already) {
+        return -2;
+    }
+
+    pthread_t old_thr;
+    int have_old = 0;
+    pthread_mutex_lock(&g_installer_mutex);
+    if (g_stream_thread_created) {
+        old_thr = g_stream_thread;
+        have_old = 1;
+        g_stream_thread_created = 0;
+    }
+    pthread_mutex_unlock(&g_installer_mutex);
+    if (have_old) {
+        pthread_join(old_thr, NULL);
+    }
+
+    uint64_t live_total = ws_live_get_total();
+    if (live_total == 0) {
+        return -1;
+    }
+
+    /* Wait for the parse-ready header prefix (browser may still be
+     * uploading it; the UI enables Install only at header_ready, so this
+     * is normally immediate). */
+    if (ws_live_wait_header(120) != 0) {
+        ps5_notify("Live install: header timed out, re-upload the package");
+        return -14;
+    }
+
+    uint8_t *hcache = (uint8_t *)malloc(WS_LIVE_SEG_SIZE);
+    if (!hcache) {
+        return -1;
+    }
+    size_t hlen = ws_live_get_header(hcache, WS_LIVE_SEG_SIZE);
+
+    pkg_detail_t detail;
+    int pm_stage = -1;
+    if (hlen == 0 ||
+        pkg_parser_parse_mem(hcache, hlen, live_total, live_uri, &detail,
+                             &pm_stage) != 0) {
+        /* Parity with disk installs: an unparseable header must not block
+         * the install (the system reads content_id from the stream itself).
+         * Log the stage so exotic layouts can be reported and fixed. */
+        install_log("[INSTALLER] Live header parse failed (stage %d, %zu bytes); "
+                    "proceeding with fallback metadata", pm_stage, hlen);
+        memset(&detail, 0, sizeof(detail));
+        strncpy(detail.path, live_uri, sizeof(detail.path) - 1);
+        strncpy(detail.filename, "live-package.pkg", sizeof(detail.filename) - 1);
+        strncpy(detail.title_id, "UNKNOWN", sizeof(detail.title_id) - 1);
+        strncpy(detail.title_name, "Package", sizeof(detail.title_name) - 1);
+        detail.total_pkg_size = live_total;
+        detail.file_size = live_total;
+    }
+    free(hcache);
+
+    if (detail.is_multipart) {
+        ps5_notify("Live install supports single packages only");
+        return -13;
+    }
+
+    char live_path_copy[512];
+    strncpy(live_path_copy, live_uri, sizeof(live_path_copy) - 1);
+    live_path_copy[sizeof(live_path_copy) - 1] = '\0';
+
+    /* 1x space: installed output only, no spool copy. */
+    uint64_t required_space = detail.total_pkg_size > 0 ? detail.total_pkg_size : live_total;
+    uint64_t avail_space = get_available_disk_space("/data");
+    if (avail_space != (uint64_t)-1 && avail_space < required_space) {
+        ps5_notify("Not enough storage space! Need %llu MB, have %llu MB",
+                   (unsigned long long)(required_space / (1024 * 1024)),
+                   (unsigned long long)avail_space / (1024 * 1024));
+        return -10;
+    }
+
+    pthread_mutex_lock(&g_installer_mutex);
+    if (g_status.is_installing) {
+        pthread_mutex_unlock(&g_installer_mutex);
+        return -2;
+    }
+    memset(&g_status, 0, sizeof(g_status));
+    g_status.is_installing = 1;
+    g_status.is_multipart = 0;
+    g_status.current_part = 0;
+    strncpy(g_status.pkg_path, live_path_copy, sizeof(g_status.pkg_path) - 1);
+    g_status.pkg_path[sizeof(g_status.pkg_path) - 1] = '\0';
+    strncpy(g_status.title_id, detail.title_id, sizeof(g_status.title_id) - 1);
+    g_status.title_id[sizeof(g_status.title_id) - 1] = '\0';
+    strncpy(g_status.title_name, detail.title_name, sizeof(g_status.title_name) - 1);
+    g_status.title_name[sizeof(g_status.title_name) - 1] = '\0';
+    strncpy(g_status.content_id, detail.content_id, sizeof(g_status.content_id) - 1);
+    g_status.content_id[sizeof(g_status.content_id) - 1] = '\0';
+    strncpy(g_status.pkg_kind, detail.pkg_type_str, sizeof(g_status.pkg_kind) - 1);
+    g_status.pkg_kind[sizeof(g_status.pkg_kind) - 1] = '\0';
+    strncpy(g_status.pkg_version, detail.app_version, sizeof(g_status.pkg_version) - 1);
+    g_status.pkg_version[sizeof(g_status.pkg_version) - 1] = '\0';
+    strncpy(g_status.status_str, "transferring", sizeof(g_status.status_str) - 1);
+    g_status.status_str[sizeof(g_status.status_str) - 1] = '\0';
+    snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+             "Installing %.200s...",
+             g_status.title_name[0] != '\0' ? g_status.title_name : "Package");
+    g_status.total_bytes = required_space;
+    g_status.downloaded_bytes = 0;
+    g_status.stream_served_bytes = 0;
+    g_status.progress_percent = 0.0f;
+    g_status.start_time = time(NULL);
+    g_status.last_poll_time = time(NULL);
+    g_cancel_stream = 0;
+
+    if (pthread_create(&g_stream_thread, NULL, stream_installer_worker, NULL) != 0) {
+        g_status.is_installing = 0;
+        g_status.failed = 1;
+        pthread_mutex_unlock(&g_installer_mutex);
+        return -12;
+    }
+    g_stream_thread_created = 1;
+    char notify_title[256];
+    strncpy(notify_title, g_status.title_name[0] ? g_status.title_name : "Package",
+            sizeof(notify_title) - 1);
+    notify_title[sizeof(notify_title) - 1] = '\0';
+    pthread_mutex_unlock(&g_installer_mutex);
+    ps5_notify("Installing %s (live)...", notify_title);
+    return 0;
+}
+
 int installer_cancel(void) {
     pthread_mutex_lock(&g_installer_mutex);
     if (!g_status.is_installing) {
@@ -1395,7 +1571,10 @@ int installer_cancel(void) {
     strncpy(g_status.status_str, "canceled", sizeof(g_status.status_str) - 1);
     snprintf(g_status.prompt_message, sizeof(g_status.prompt_message), "Installation was canceled");
     pthread_mutex_unlock(&g_installer_mutex);
+    /* NEW: unblock live readers before the stop drains vs_refs, then free. */
+    ws_live_abort();
     stream_server_session_stop();
+    ws_live_destroy();
     ps5_notify("Installation canceled");
     return 0;
 }
@@ -1516,6 +1695,8 @@ char *installer_status_to_json(void) {
 void installer_shutdown(void) {
     g_cancel_stream = 1;
     g_monitor_running = 0;
+    /* NEW: unblock any live readers so the worker join below can't wedge. */
+    ws_live_abort();
     if (g_stream_thread_created) {
         pthread_join(g_stream_thread, NULL);
         g_stream_thread_created = 0;

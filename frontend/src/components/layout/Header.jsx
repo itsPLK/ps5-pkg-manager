@@ -1,7 +1,7 @@
 import React from 'react';
 import { formatBytes } from '../../utils/formatters';
 
-export default function Header({ appVersion, storage, showSettings, showSmbPage, onSettingsClick, onRescan, refreshing, selectedDrive, onBackToDrives }) {
+export default function Header({ appVersion, storage, showSettings, showSmbPage, showDirectInstall, onDirectInstallClick, onSettingsClick, onRescan, refreshing, selectedDrive, onBackToDrives }) {
   const internalFree = storage ? (storage.internal?.free ?? storage.free ?? 0) : 0;
   const internalTotal = storage ? ((storage.internal?.total ?? storage.total) || 1) : 1;
   const internalUsed = storage ? (storage.internal?.used ?? storage.used ?? Math.max(0, internalTotal - internalFree)) : 0;
@@ -12,7 +12,6 @@ export default function Header({ appVersion, storage, showSettings, showSmbPage,
   const nvmeTotal = hasNvme ? (storage.nvme.total || 1) : 1;
   const nvmeUsed = hasNvme ? (storage.nvme.used ?? Math.max(0, nvmeTotal - nvmeFree)) : 0;
   const nvmeUsedPct = Math.min(100, Math.max(0, (nvmeUsed / nvmeTotal) * 100));
-
   return (
     <header className="border-b border-white/10 bg-[#12131a] px-4 py-3 sm:px-6">
       {/* Top Header Bar (Non-sticky, hides naturally when scrolling down) */}
@@ -95,6 +94,24 @@ export default function Header({ appVersion, storage, showSettings, showSmbPage,
                 </div>
               </div>
             )}
+
+            {/* Direct Install Button */}
+            <button
+              type="button"
+              onClick={onDirectInstallClick}
+              className={`px-3.5 py-1.5 rounded-[2px] ps5-focus-item border text-xs font-semibold transition-colors flex items-center space-x-1.5 cursor-pointer ${
+                showDirectInstall
+                  ? 'bg-white/20 border-white/40 text-white'
+                  : 'bg-white/10 hover:bg-white/15 border-white/10 text-zinc-200'
+              }`}
+            >
+              <svg className="w-3.5 h-3.5 text-zinc-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 3v12" />
+                <path d="M7 10l5 5 5-5" />
+                <path d="M4 21h16" />
+              </svg>
+              <span>Direct Install</span>
+            </button>
 
             {/* Settings Button */}
             <button

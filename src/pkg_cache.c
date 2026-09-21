@@ -23,6 +23,7 @@ static app_settings_t g_settings = {
     .move_installed_to_end = 1,
     .fade_installed_packages = 1,
     .all_sources_mode = 0,
+    .pkg_install_debug = 0,
     .smb_share_count = 0
 };
 
@@ -124,6 +125,15 @@ static void load_settings_from_disk(void) {
         }
     }
 
+    char *debug_ptr = strstr(buf, "\"pkg_install_debug\":");
+    if (debug_ptr) {
+        if (strncmp(debug_ptr + 20, "true", 4) == 0 || strncmp(debug_ptr + 21, "true", 4) == 0) {
+            g_settings.pkg_install_debug = 1;
+        } else {
+            g_settings.pkg_install_debug = 0;
+        }
+    }
+
     pkg_cache_parse_smb_shares(buf, g_settings.smb_shares, &g_settings.smb_share_count);
     free(buf);
 }
@@ -142,10 +152,12 @@ static void save_settings_to_disk(void) {
                "  \"move_installed_to_end\": %s,\n"
                "  \"fade_installed_packages\": %s,\n"
                "  \"all_sources_mode\": %s,\n"
+               "  \"pkg_install_debug\": %s,\n"
                "  \"smb_shares\": [\n",
             g_settings.move_installed_to_end ? "true" : "false",
             g_settings.fade_installed_packages ? "true" : "false",
-            g_settings.all_sources_mode ? "true" : "false");
+            g_settings.all_sources_mode ? "true" : "false",
+            g_settings.pkg_install_debug ? "true" : "false");
 
     for (int i = 0; i < g_settings.smb_share_count; i++) {
         const smb_share_config_t *s = &g_settings.smb_shares[i];
@@ -209,6 +221,7 @@ int pkg_cache_set_settings(const app_settings_t *settings) {
     g_settings.move_installed_to_end = settings->move_installed_to_end ? 1 : 0;
     g_settings.fade_installed_packages = settings->fade_installed_packages ? 1 : 0;
     g_settings.all_sources_mode = settings->all_sources_mode ? 1 : 0;
+    g_settings.pkg_install_debug = settings->pkg_install_debug ? 1 : 0;
     g_settings.smb_share_count = (settings->smb_share_count <= MAX_SMB_SHARES) ? settings->smb_share_count : MAX_SMB_SHARES;
     if (g_settings.smb_share_count < 0) g_settings.smb_share_count = 0;
     for (int i = 0; i < g_settings.smb_share_count; i++) {

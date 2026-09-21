@@ -14,9 +14,11 @@
 #include "version.h"
 #include "http_server.h"
 #include "stream_server.h"
+#include "stream_debug_log.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <dirent.h>
 
 static void test_invalid_pkg_files(void) {
     printf("--- Testing invalid PKG handling ---\n");
@@ -652,6 +654,120 @@ static void test_stream_server_http(void) {
     printf("Stream server HTTP range streaming tests passed.\n");
 }
 
+static void test_stream_debug_logging(void) {
+    printf("--- Testing package install stream debug logging ---\n");
+
+    /* Create sandbox debug directory */
+    char dbg_dir[] = "/tmp/test_stream_dbg_XXXXXX";
+    assert(mkdtemp(dbg_dir) != NULL);
+    setenv("PKG_DEBUG_DIR", dbg_dir, 1);
+
+    const char *fix_path = "/tmp/test_stream_dbg.pkg";
+    unlink(fix_path);
+    assert(fixture_write_ps5_pkg(fix_path, "PPSA77777", "DbgLogTest", "update", "01.020.000", 0) == 0);
+
+    /* 1. Start stream session and open debug log */
+    assert(stream_server_session_start_ex(fix_path, "package-dbg.pkg") == 0);
+    assert(stream_server_is_running() != 0);
+
+    assert(stream_debug_log_open("PPSA77777", "EP0001-PPSA77777_00-0000000000000000", "update", fix_path, 65837) == 0);
+    assert(stream_debug_log_is_active() == 1);
+
+    /* 2. Client 1: Range request */
+    int sock1 = tcp_connect_stream_server();
+    assert(sock1 >= 0);
+    const char *req1 = "GET /stream/install/package-dbg.pkg HTTP/1.1\r\n"
+                       "Host: 127.0.0.1:8845\r\n"
+                       "Range: bytes=0-31\r\n"
+                       "Connection: close\r\n\r\n";
+    assert(send(sock1, req1, strlen(req1), 0) == (ssize_t)strlen(req1));
+
+    char buf1[512] = {0};
+    ssize_t n1 = 0;
+    while ((n1 = recv(sock1, buf1, sizeof(buf1), 0)) > 0) {}
+    close(sock1);
+
+    /* 3. Client 2: Concurrent / secondary request */
+    int sock2 = tcp_connect_stream_server();
+    assert(sock2 >= 0);
+    const char *req2 = "GET /stream/install/package-dbg.pkg HTTP/1.1\r\n"
+                       "Host: 127.0.0.1:8845\r\n"
+                       "Range: bytes=100-199\r\n"
+                       "Connection: close\r\n\r\n";
+    assert(send(sock2, req2, strlen(req2), 0) == (ssize_t)strlen(req2));
+
+    char buf2[512] = {0};
+    ssize_t n2 = 0;
+    while ((n2 = recv(sock2, buf2, sizeof(buf2), 0)) > 0) {}
+    close(sock2);
+
+    /* 4. Client 3: Invalid path to trigger 404 logging */
+    int sock3 = tcp_connect_stream_server();
+    assert(sock3 >= 0);
+    const char *req3 = "GET /stream/install/other-name.pkg HTTP/1.1\r\n"
+                       "Host: 127.0.0.1:8845\r\n"
+                       "Connection: close\r\n\r\n";
+    assert(send(sock3, req3, strlen(req3), 0) == (ssize_t)strlen(req3));
+    char buf3[512] = {0};
+    while (recv(sock3, buf3, sizeof(buf3), 0) > 0) {}
+    close(sock3);
+
+    /* 5. Stop session and close debug log */
+    stream_server_session_stop();
+    assert(stream_server_is_running() == 0);
+    assert(stream_debug_log_is_active() == 0);
+    unlink(fix_path);
+
+    /* 6. Verify debug log file exists and validate contents */
+    DIR *d = opendir(dbg_dir);
+    assert(d != NULL);
+    struct dirent *ent;
+    char found_file[1024] = {0};
+    while ((ent = readdir(d)) != NULL) {
+        if (strncmp(ent->d_name, "stream_debug_PPSA77777_update_", 30) == 0 &&
+            strstr(ent->d_name, ".txt") != NULL) {
+            snprintf(found_file, sizeof(found_file), "%s/%s", dbg_dir, ent->d_name);
+            break;
+        }
+    }
+    closedir(d);
+    assert(found_file[0] != '\0');
+    printf("  Found generated debug log: %s\n", found_file);
+
+    /* Read and verify file contents */
+    FILE *lf = fopen(found_file, "r");
+    assert(lf != NULL);
+    char log_content[16384] = {0};
+    size_t rd = fread(log_content, 1, sizeof(log_content) - 1, lf);
+    fclose(lf);
+    assert(rd > 0);
+    log_content[rd] = '\0';
+
+    /* Verify header fields */
+    assert(strstr(log_content, "# title_id:   PPSA77777") != NULL);
+    assert(strstr(log_content, "# content_id: EP0001-PPSA77777_00-0000000000000000") != NULL);
+    assert(strstr(log_content, "# pkg_kind:   update") != NULL);
+    assert(strstr(log_content, "# total_size: 65837") != NULL);
+
+    /* Verify event entries */
+    assert(strstr(log_content, "CONN_OPEN") != NULL);
+    assert(strstr(log_content, "Range: bytes=0-31") != NULL);
+    assert(strstr(log_content, "Range: bytes=100-199") != NULL);
+    assert(strstr(log_content, "BODY_DONE") != NULL);
+    assert(strstr(log_content, "sent=32/32") != NULL);
+    assert(strstr(log_content, "sent=100/100") != NULL);
+    assert(strstr(log_content, "reason=complete") != NULL);
+    assert(strstr(log_content, "CONN_CLOSE") != NULL);
+    assert(strstr(log_content, "404") != NULL);
+    assert(strstr(log_content, "# Session ended") != NULL);
+
+    /* Clean up */
+    unlink(found_file);
+    rmdir(dbg_dir);
+
+    printf("Package install stream debug logging tests passed.\n");
+}
+
 int main(void) {
     printf(">>> RUNNING EDGE CASE TESTS <<<\n");
     test_invalid_pkg_files();
@@ -664,6 +780,7 @@ int main(void) {
     test_version_and_log_headers();
     test_service_restoration_and_watchdog();
     test_stream_server_http();
+    test_stream_debug_logging();
     printf("\n>>> ALL EDGE CASE TESTS PASSED! <<<\n");
     return 0;
 }

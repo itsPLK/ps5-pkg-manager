@@ -9,6 +9,7 @@
 #include "miniz.h"
 #include "smb_client.h"
 #include "installer.h"
+#include "ws_stream.h" /* NEW: live: scheme backend (additive; no SMB/file paths touched) */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -396,6 +397,37 @@ int virtual_stream_open(const char *initial_path, virtual_stream_t *stream) {
     pthread_mutex_init(&stream->lock, NULL);
     stream->lock_inited = 1;
 
+    /* NEW: live RAM session pushed from a browser (Direct Install).
+     * Attaches to the current ws_live session when the id matches;
+     * works while uploading and after byte-complete. */
+    if (strncmp(initial_path, "live:", 5) == 0) {
+        const char *id = initial_path + 5;
+        if (!ws_live_check_id(id)) {
+            virtual_stream_close(stream);
+            return -1;
+        }
+        uint64_t ltotal = ws_live_get_total();
+        if (ltotal == 0) {
+            virtual_stream_close(stream);
+            return -1;
+        }
+        stream->is_multipart = 0;
+        stream->is_smb = 0;
+        stream->is_live = 1;
+        stream->live = (void *)1; /* singleton handle; lifecycle owned by ws layer */
+        stream->current_part = 1;
+        stream->total_parts = 1;
+        stream->total_pkg_size = ltotal;
+        snprintf(stream->pkg_filename, sizeof(stream->pkg_filename), "%s.pkg", id);
+        if (ws_live_attach() != 0) {
+            stream->is_live = 0;
+            stream->live = NULL;
+            virtual_stream_close(stream);
+            return -1;
+        }
+        return 0;
+    }
+
     if (strncmp(initial_path, "smb://", 6) == 0) {
         smb_file_session_t *sess = smb_file_session_open(initial_path);
         if (!sess) {
@@ -576,6 +608,20 @@ ssize_t virtual_stream_read(virtual_stream_t *stream, uint64_t pkg_offset, void 
     if (!stream || !buf || count == 0) return 0;
     if (pkg_offset >= stream->total_pkg_size) return 0;
 
+    /* NEW: live RAM session. Delivers full count or fails (0 at true EOF,
+     * -1 on abort/timeout/evicted range); never returns partial mid-file
+     * data, matching what the stream server expects. */
+    if (stream->is_live) {
+        size_t to_read = count;
+        if (pkg_offset + to_read > stream->total_pkg_size) {
+            to_read = (size_t)(stream->total_pkg_size - pkg_offset);
+        }
+        if (to_read == 0) return 0;
+        long n = ws_live_read(pkg_offset, buf, to_read);
+        if (n < 0) return -1;
+        return (ssize_t)n;
+    }
+
     if (stream->is_smb && stream->smb_session) {
         /* SMB sessions self-serialize via their own mutex; no stream
          * lock is taken here so slow network reads never stall the
@@ -739,6 +785,14 @@ ssize_t virtual_stream_read(virtual_stream_t *stream, uint64_t pkg_offset, void 
 
 void virtual_stream_close(virtual_stream_t *stream) {
     if (!stream) return;
+    /* NEW: live sessions are owned by the ws layer (abort/destroy there);
+     * close only detaches so session_stop never blocks on readers (the
+     * abort that unblocks them runs before stop drains vs_refs). */
+    if (stream->is_live) {
+        stream->is_live = 0;
+        stream->live = NULL;
+        ws_live_detach();
+    }
     if (stream->is_smb && stream->smb_session) {
         smb_file_session_close((smb_file_session_t *)stream->smb_session);
         stream->smb_session = NULL;

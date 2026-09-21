@@ -38,6 +38,8 @@ extern "C" {
 
 int installer_init(const char *server_url);
 int installer_start(const char *pkg_path);
+/* NEW: start from a live RAM session ("live:<id>"); see installer.c. */
+int installer_start_live(const char *live_uri);
 int installer_cancel(void);
 void installer_record_poll(void);
 void installer_get_status(installer_status_t *out);

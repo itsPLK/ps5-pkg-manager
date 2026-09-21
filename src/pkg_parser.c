@@ -1105,6 +1105,359 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
     return 0;
 }
 
+/* Bounded slice reader for the mem parser: NULL when [off, off+sz) is not
+ * fully inside [data, data+data_len). Fail-closed, overflow-safe. */
+static const uint8_t *mem_slice(const uint8_t *data, size_t data_len,
+                                uint64_t off, uint64_t sz) {
+    if (sz == 0 || off > data_len) return NULL;
+    if (sz > data_len || off > data_len - sz) return NULL;
+    return data + off;
+}
+
+int pkg_parser_parse_mem(const uint8_t *data, size_t data_len,
+                         uint64_t total_size, const char *filename,
+                         pkg_detail_t *out, int *out_stage) {
+#define PM_STAGE(n) do { if (out_stage) *out_stage = (n); } while (0)
+    if (!data || data_len == 0 || !out) {
+        PM_STAGE(1);
+        return -1;
+    }
+    memset(out, 0, sizeof(*out));
+    if (filename && filename[0] != '\0') {
+        const char *slash = strchr(filename, '/');
+        const char *base = slash ? slash + 1 : filename;
+        /* Live URIs look like "live:<id>": keep a friendly display name. */
+        if (strncmp(base, "live:", 5) == 0) {
+            snprintf(out->filename, sizeof(out->filename), "%.200s.pkg", base);
+            snprintf(out->path, sizeof(out->path), "%s", base);
+        } else {
+            strncpy(out->filename, base, sizeof(out->filename) - 1);
+            strncpy(out->path, filename, sizeof(out->path) - 1);
+        }
+    }
+    out->file_size = total_size;
+    out->total_pkg_size = total_size;
+    out->pkg_type = PKG_TYPE_UNKNOWN;
+
+    const uint8_t *hdr = mem_slice(data, data_len, 0, 0x80);
+    if (!hdr) {
+        PM_STAGE(1);
+        return -1;
+    }
+
+    /* Multi-part container: same field mapping as the file parser. */
+    if (data_len >= MULTIPART_MAGIC_LEN &&
+        memcmp(data, MULTIPART_MAGIC, MULTIPART_MAGIC_LEN) == 0) {
+        const uint8_t *mp = mem_slice(data, data_len, 0, sizeof(multipart_header_t));
+        if (!mp) {
+            return -1;
+        }
+        multipart_header_t mhdr;
+        memcpy(&mhdr, mp, sizeof(mhdr));
+        if (!multipart_is_valid_header(&mhdr)) {
+            return -1;
+        }
+        mhdr.pkg_type[sizeof(mhdr.pkg_type) - 1] = '\0';
+        mhdr.title_id[sizeof(mhdr.title_id) - 1] = '\0';
+        mhdr.title_name[sizeof(mhdr.title_name) - 1] = '\0';
+        mhdr.content_id[sizeof(mhdr.content_id) - 1] = '\0';
+        mhdr.app_version[sizeof(mhdr.app_version) - 1] = '\0';
+        out->is_multipart = 1;
+        out->part_index = mhdr.part_index;
+        out->total_parts = mhdr.total_parts;
+        if (strcmp(mhdr.pkg_type, "update") == 0) {
+            out->pkg_type = PKG_TYPE_UPDATE;
+            strncpy(out->pkg_type_str, "update", sizeof(out->pkg_type_str) - 1);
+        } else if (strcmp(mhdr.pkg_type, "dlc") == 0) {
+            out->pkg_type = PKG_TYPE_DLC;
+            strncpy(out->pkg_type_str, "dlc", sizeof(out->pkg_type_str) - 1);
+        } else {
+            out->pkg_type = PKG_TYPE_BASE;
+            strncpy(out->pkg_type_str, "base", sizeof(out->pkg_type_str) - 1);
+        }
+        if (mhdr.title_id[0] != '\0') {
+            strncpy(out->title_id, mhdr.title_id, sizeof(out->title_id) - 1);
+        } else {
+            strncpy(out->title_id, "UNKNOWN", sizeof(out->title_id) - 1);
+        }
+        if (mhdr.title_name[0] != '\0') {
+            strncpy(out->title_name, mhdr.title_name, sizeof(out->title_name) - 1);
+        } else {
+            strncpy(out->title_name, out->title_id, sizeof(out->title_name) - 1);
+        }
+        if (mhdr.app_version[0] != '\0') {
+            strncpy(out->app_version, mhdr.app_version, sizeof(out->app_version) - 1);
+        }
+        if (mhdr.content_id[0] != '\0') {
+            strncpy(out->content_id, mhdr.content_id, sizeof(out->content_id) - 1);
+        }
+        if (mhdr.total_pkg_size > 0) {
+            out->total_pkg_size = mhdr.total_pkg_size;
+        }
+        out->has_icon = 0;
+        out->is_valid = 1;
+        PM_STAGE(0);
+        return 0;
+    }
+
+    uint64_t cnt_offset = 0;
+    int cnt_found = 0;
+    if (memcmp(hdr, "\x7f" "CNT", 4) == 0) {
+        cnt_offset = 0;
+        cnt_found = 1;
+    } else if (memcmp(hdr, "\x7f" "FIH", 4) == 0) {
+        const uint8_t *e58 = mem_slice(data, data_len, 0x58, 8);
+        if (e58) {
+            uint64_t cand = read_le64(e58);
+            const uint8_t *t = mem_slice(data, data_len, cand, 4);
+            /* Parity with the file parser: candidate must be a plausible
+             * in-file offset (positive, below total size). */
+            if (cand > 0 && (total_size == 0 || cand < total_size) &&
+                t && memcmp(t, "\x7f" "CNT", 4) == 0) {
+                cnt_offset = cand;
+                cnt_found = 1;
+            }
+        }
+        if (!cnt_found) {
+            /* Parity: the file parser scans only its 0x200-byte header
+             * window, so a coincidental match deeper in the buffer must
+             * not win here either. */
+            uint64_t scan_end = data_len < 0x200 ? data_len : 0x200;
+            for (uint64_t off = 0x10; off + 8 <= scan_end; off += 0x08) {
+                const uint8_t *e = mem_slice(data, data_len, off, 8);
+                if (!e) break;
+                uint64_t cand = read_le64(e);
+                if (cand >= 0x10000 && (total_size == 0 || cand < total_size) &&
+                    (cand % 0x1000) == 0) {
+                    const uint8_t *t = mem_slice(data, data_len, cand, 4);
+                    if (t && memcmp(t, "\x7f" "CNT", 4) == 0) {
+                        cnt_offset = cand;
+                        cnt_found = 1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if (!cnt_found) {
+        PM_STAGE(2);
+        return -1;
+    }
+
+    const uint8_t *cnt_hdr = mem_slice(data, data_len, cnt_offset, 0x80);
+    if (!cnt_hdr || memcmp(cnt_hdr, "\x7f" "CNT", 4) != 0) {
+        PM_STAGE(3);
+        return -1;
+    }
+    uint32_t cnt_type_magic = read_be32(cnt_hdr + 0x04);
+
+    const uint8_t *cid = mem_slice(data, data_len, cnt_offset + 0x40, 48);
+    if (!cid) {
+        PM_STAGE(4);
+        return -1;
+    }
+    memcpy(out->content_id, cid, 48);
+    out->content_id[48] = '\0';
+    for (int i = 0; i < 48; i++) {
+        if ((unsigned char)out->content_id[i] < 32 || (unsigned char)out->content_id[i] > 126) {
+            out->content_id[i] = '\0';
+            break;
+        }
+    }
+
+    uint32_t entry_count = read_be32(cnt_hdr + 0x10);
+    uint32_t table_offset = read_be32(cnt_hdr + 0x18);
+    if (entry_count == 0 || entry_count > 2048 || table_offset > 0x200000) {
+        PM_STAGE(5);
+        return -1;
+    }
+    uint64_t table_size = (uint64_t)entry_count * 32;
+    const uint8_t *entry_table = mem_slice(data, data_len,
+                                           cnt_offset + table_offset, table_size);
+    if (!entry_table) {
+        PM_STAGE(6); /* table beyond the cached prefix */
+        return -1;
+    }
+
+    uint32_t str_table_off = 0;
+    uint32_t str_table_sz = 0;
+    for (uint32_t i = 0; i < entry_count; i++) {
+        const uint8_t *e = entry_table + i * 32;
+        if (read_be32(e) == 0x0200) {
+            str_table_off = read_be32(e + 16);
+            str_table_sz = read_be32(e + 20);
+            break;
+        }
+    }
+    const char *str_table = NULL;
+    if (str_table_sz > 0 && str_table_sz < 65536) {
+        str_table = (const char *)mem_slice(data, data_len,
+                                            cnt_offset + str_table_off,
+                                            str_table_sz);
+    }
+
+    int has_playgo_chunk_patch = 0;
+    int has_delta_patch = 0;
+    for (uint32_t i = 0; i < entry_count; i++) {
+        const uint8_t *e = entry_table + i * 32;
+        uint32_t type = read_be32(e);
+        uint32_t fn_off = read_be32(e + 4);
+        uint32_t data_off = read_be32(e + 16);
+        uint32_t data_sz = read_be32(e + 20);
+
+        const char *name = "";
+        char name_tmp[128] = {0};
+        if (str_table && fn_off < str_table_sz) {
+            size_t nl = strnlen(str_table + fn_off, str_table_sz - fn_off);
+            if (nl < sizeof(name_tmp)) {
+                memcpy(name_tmp, str_table + fn_off, nl + 1);
+                name = name_tmp;
+            }
+        }
+
+        if (type == 0x1008 || strcmp(name, "app/playgo-chunk.dat") == 0) {
+            has_playgo_chunk_patch = 1;
+        }
+        if (type == 0x0407 || type == 0x0408 ||
+            strcmp(name, "target-deltainfo.dat") == 0 || strcmp(name, "origin-deltainfo.dat") == 0) {
+            has_delta_patch = 1;
+        }
+
+        /* 1. param.json (PS5) */
+        if ((type == 0x2000 || strcmp(name, "param.json") == 0) && data_sz > 0 && data_sz < 262144) {
+            const uint8_t *jb = mem_slice(data, data_len, cnt_offset + data_off, data_sz);
+            if (jb) {
+                char tid[PKG_TITLE_ID_LEN] = {0};
+                char tname[PKG_TITLE_NAME_LEN] = {0};
+                if (json_extract_key((const char *)jb, data_sz, "titleId", tid, sizeof(tid)) == 0) {
+                    strncpy(out->title_id, tid, sizeof(out->title_id) - 1);
+                }
+                if (json_extract_key((const char *)jb, data_sz, "titleName", tname, sizeof(tname)) == 0) {
+                    strncpy(out->title_name, tname, sizeof(out->title_name) - 1);
+                }
+                char cat_buf[16] = {0};
+                if (json_extract_key((const char *)jb, data_sz, "category", cat_buf, sizeof(cat_buf)) == 0 && out->category[0] == '\0') {
+                    strncpy(out->category, cat_buf, sizeof(out->category) - 1);
+                }
+                char ver[32] = {0};
+                if (json_extract_key((const char *)jb, data_sz, "contentVersion", ver, sizeof(ver)) == 0 ||
+                    json_extract_key((const char *)jb, data_sz, "appVersion", ver, sizeof(ver)) == 0 ||
+                    json_extract_key((const char *)jb, data_sz, "version", ver, sizeof(ver)) == 0) {
+                    if (ver[0] != '\0') {
+                        int maj = 0, min = 0, patch = 0;
+                        if (sscanf(ver, "%d.%d.%d", &maj, &min, &patch) == 3) {
+                            if (min == 0 && patch > 0) {
+                                snprintf(out->app_version, sizeof(out->app_version), "v%d.%02d", maj, patch);
+                            } else if (patch == 0) {
+                                snprintf(out->app_version, sizeof(out->app_version), "v%d.%02d", maj, min);
+                            } else {
+                                snprintf(out->app_version, sizeof(out->app_version), "v%d.%d.%d", maj, min, patch);
+                            }
+                        } else if (ver[0] != 'v' && ver[0] != 'V') {
+                            snprintf(out->app_version, sizeof(out->app_version), "v%.29s", ver);
+                        } else {
+                            strncpy(out->app_version, ver, sizeof(out->app_version) - 1);
+                        }
+                    }
+                }
+            }
+        }
+
+        /* 2. param.sfo (PS4) */
+        if ((type == 0x1000 || strcmp(name, "param.sfo") == 0) && data_sz > 0 && data_sz < 262144) {
+            const uint8_t *sb = mem_slice(data, data_len, cnt_offset + data_off, data_sz);
+            if (sb) {
+                char stitle[PKG_TITLE_NAME_LEN] = {0};
+                char stid[PKG_TITLE_ID_LEN] = {0};
+                char sver[32] = {0};
+                char sloc[PKG_LOCALIZED_TITLES_LEN] = {0};
+                char slang[PKG_DEFAULT_LANG_LEN] = {0};
+                pkg_parser_parse_param_sfo(sb, data_sz, stitle, sizeof(stitle), stid, sizeof(stid), sver, sizeof(sver),
+                                out->category, sizeof(out->category),
+                                sloc, sizeof(sloc), slang, sizeof(slang));
+                if (out->title_id[0] == '\0' && stid[0] != '\0') {
+                    strncpy(out->title_id, stid, sizeof(out->title_id) - 1);
+                }
+                if (out->title_name[0] == '\0' && stitle[0] != '\0') {
+                    strncpy(out->title_name, stitle, sizeof(out->title_name) - 1);
+                }
+                if (out->app_version[0] == '\0' && sver[0] != '\0') {
+                    strncpy(out->app_version, sver, sizeof(out->app_version) - 1);
+                }
+                if (out->localized_titles[0] == '\0' && sloc[0] != '\0') {
+                    strncpy(out->localized_titles, sloc, sizeof(out->localized_titles) - 1);
+                }
+                if (out->default_language[0] == '\0' && slang[0] != '\0') {
+                    strncpy(out->default_language, slang, sizeof(out->default_language) - 1);
+                }
+            }
+        }
+        /* 3. icon0.png: skipped for live sessions (has_icon stays 0). */
+    }
+
+    int is_delta_type = ((cnt_type_magic & 0xFF) == 0x1E || (cnt_type_magic & 0xFF000000) == 0x41000000);
+
+    if (has_playgo_chunk_patch || has_delta_patch || is_delta_type ||
+        (out->category[0] != '\0' && strncmp(out->category, "gp", 2) == 0)) {
+        out->pkg_type = PKG_TYPE_UPDATE;
+    } else if (out->category[0] != '\0') {
+        if (strncmp(out->category, "ac", 2) == 0 || strncmp(out->category, "al", 2) == 0 ||
+            strcmp(out->category, "addcont") == 0) {
+            out->pkg_type = PKG_TYPE_DLC;
+        } else if (strncmp(out->category, "gd", 2) == 0 || strncmp(out->category, "bd", 2) == 0 ||
+                   strncmp(out->category, "gc", 2) == 0 || strncmp(out->category, "wt", 2) == 0) {
+            out->pkg_type = PKG_TYPE_BASE;
+        }
+    } else if (cnt_type_magic == 1) {
+        out->pkg_type = PKG_TYPE_DLC;
+    }
+
+    if (out->pkg_type == PKG_TYPE_UNKNOWN) {
+        out->pkg_type = PKG_TYPE_BASE;
+    }
+
+    switch (out->pkg_type) {
+        case PKG_TYPE_BASE:
+            strncpy(out->pkg_type_str, "base", sizeof(out->pkg_type_str) - 1);
+            break;
+        case PKG_TYPE_UPDATE:
+            strncpy(out->pkg_type_str, "update", sizeof(out->pkg_type_str) - 1);
+            break;
+        case PKG_TYPE_DLC:
+            strncpy(out->pkg_type_str, "dlc", sizeof(out->pkg_type_str) - 1);
+            break;
+        default:
+            strncpy(out->pkg_type_str, "unknown", sizeof(out->pkg_type_str) - 1);
+            break;
+    }
+
+    if (out->title_id[0] == '\0' && out->content_id[0] != '\0') {
+        const char *dash = strchr(out->content_id, '-');
+        if (dash) {
+            const char *us = strchr(dash + 1, '_');
+            if (us && (size_t)(us - (dash + 1)) < sizeof(out->title_id)) {
+                size_t len = us - (dash + 1);
+                strncpy(out->title_id, dash + 1, len);
+                out->title_id[len] = '\0';
+            }
+        }
+    }
+
+    if (out->title_name[0] == '\0') {
+        if (out->title_id[0] != '\0') {
+            snprintf(out->title_name, sizeof(out->title_name), "%s", out->title_id);
+        } else {
+            snprintf(out->title_name, sizeof(out->title_name), "Unknown Package");
+        }
+    }
+
+    out->has_icon = 0;
+    out->is_valid = 1;
+    PM_STAGE(0);
+    return 0;
+#undef PM_STAGE
+}
+
 int pkg_parser_get_icon(const char *file_path, uint64_t offset, uint32_t size,
                         uint8_t **out_data, size_t *out_size) {
     if (!file_path || !out_data || !out_size) {

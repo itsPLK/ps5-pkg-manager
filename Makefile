@@ -21,9 +21,12 @@ LIBS     := $(TARGET)/lib/libmicrohttpd.a \
             -lSceAppInstUtil -lSceIpmi -lSceNet
 
 SRCS := src/main.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c src/smb_client.c src/installer.c \
-        src/http_server.c src/stream_server.c src/notification.c \
+        src/http_server.c src/stream_server.c src/stream_debug_log.c src/notification.c \
         src/multipart.c src/miniz.c src/app_info.c src/sqlite3.c src/icon_blurhash.c src/leftovers.c src/app_diag.c \
         src/app_installer.c
+# NEW isolated module: direct-install WS upload (PLAN.md). Additive only;
+# existing SRCS/CFLAGS/LIBS lines above are untouched.
+SRCS_WS := src/ws_upload.c src/ws_stream.c
 OBJS := $(SRCS:.c=.o)
 ELF  := pkgmgr.elf
 
@@ -51,8 +54,8 @@ LDFLAGS := -Wl,--gc-sections
 
 # Host test build (uses tests/mock_smb.c instead of real libsmb2; MHD not needed)
 TEST_CFLAGS := -g -O0 -Wall -Wextra -Iinclude -Ideps/libsmb2/include -Ideps/libsmb2/include/smb2 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_THREADSAFE=2 -DSQLITE_OMIT_WAL -DPKGMGR_BUILD_COMMIT=\"$(BUILD_COMMIT)\" -DPKGMGR_BUILD_DATE=\"$(BUILD_DATE)\"
-TEST_SRCS := src/multipart.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c src/miniz.c src/smb_client.c src/installer.c src/stream_server.c src/notification.c src/app_info.c src/icon_blurhash.c src/leftovers.c src/app_diag.c src/app_installer.c src/sqlite3.c tests/mock_smb.c
-TESTS := test_pkg_parser test_pkg_scanner test_pkg_cache test_installer test_leftovers test_edge_cases test_multipart
+TEST_SRCS := src/multipart.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c src/miniz.c src/smb_client.c src/installer.c src/stream_server.c src/stream_debug_log.c src/notification.c src/app_info.c src/icon_blurhash.c src/leftovers.c src/app_diag.c src/app_installer.c src/sqlite3.c tests/mock_smb.c tests/ps5_sim.c src/ws_upload.c src/ws_stream.c tests/ws_test_client.c
+TESTS := test_pkg_parser test_pkg_scanner test_pkg_cache test_installer test_leftovers test_edge_cases test_multipart test_stream_sim test_ws_upload test_direct_install_e2e test_ws_stream test_ws_stream_far test_parse_mem
 
 all: $(ELF)
 
@@ -112,9 +115,9 @@ deps/libsmb2/build/lib/libsmb2.a:
 	/opt/ps5-payload-sdk/bin/prospero-cmake .. -DBUILD_SHARED_LIBS=OFF && \
 	$(MAKE) -j$$(nproc)
 
-$(ELF): $(ASSET_HEADERS) $(LIBSMB2) $(SRCS)
+$(ELF): $(ASSET_HEADERS) $(LIBSMB2) $(SRCS) $(SRCS_WS)
 	@echo "Building $(ELF)..."
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $(ELF) $(SRCS) $(LIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $(ELF) $(SRCS) $(SRCS_WS) $(LIBS)
 	@echo "Stripping $(ELF)..."
 	$(STRIP) $(ELF)
 

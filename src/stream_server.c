@@ -8,6 +8,7 @@
 #include "stream_server.h"
 #include "multipart.h"
 #include "installer.h"
+#include "stream_debug_log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -470,6 +471,7 @@ static void serve_connection(int conn, int conn_id, const char *peer_str) {
     stream_debug_log("[STREAM] conn #%d peer=%s finished reqs=%d (elapsed=%llums)",
                      conn_id, peer, reqs_served,
                      (unsigned long long)(stream_now_ms() - t_start_ms));
+    stream_debug_log_conn_close(conn_id, peer, reqs_served);
     __sync_sub_and_fetch(&g_stream_active_workers, 1);
 }
 
@@ -587,6 +589,7 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
                     conn_id, peer, req_no, method, sres == 0 ? "ok" : strerror(errno),
                     (unsigned long long)(stream_now_ms() - t_start_ms));
         install_log("[STREAM] WARNING: raw 405 Method Not Allowed for '%s'", method);
+        stream_debug_log_request(conn_id, req_no, peer, method, path, 0, 0, 0, 405, 0, 0);
         return (sres == 0 && keep_wanted) ? SERVE_KEEP : SERVE_CLOSE;
     }
     if (strncmp(route, "/stream/", 8) != 0) {
@@ -599,6 +602,7 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
                     conn_id, peer, req_no, path, sres == 0 ? "ok" : strerror(errno),
                     (unsigned long long)(stream_now_ms() - t_start_ms));
         install_log("[STREAM] WARNING: raw 404 Not Found for '%s'", path);
+        stream_debug_log_request(conn_id, req_no, peer, method, path, 0, 0, 0, 404, 0, 0);
         return (sres == 0 && keep_wanted) ? SERVE_KEEP : SERVE_CLOSE;
     }
     {
@@ -629,6 +633,7 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
                             conn_id, peer, req_no, path, pinned, sres == 0 ? "ok" : strerror(errno),
                             (unsigned long long)(stream_now_ms() - t_start_ms));
                 install_log("[STREAM] WARNING: raw 404 Not Found for '%s'", path);
+                stream_debug_log_request(conn_id, req_no, peer, method, path, 0, 0, 0, 404, 0, 0);
                 return (sres == 0 && keep_wanted) ? SERVE_KEEP : SERVE_CLOSE;
             }
         } else if (!is_pkg) {
@@ -641,6 +646,7 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
                         conn_id, peer, req_no, path, sres == 0 ? "ok" : strerror(errno),
                         (unsigned long long)(stream_now_ms() - t_start_ms));
             install_log("[STREAM] WARNING: raw 404 Not Found for '%s'", path);
+            stream_debug_log_request(conn_id, req_no, peer, method, path, 0, 0, 0, 404, 0, 0);
             return (sres == 0 && keep_wanted) ? SERVE_KEEP : SERVE_CLOSE;
         }
     }
@@ -679,6 +685,7 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
                     conn_id, peer, req_no, (unsigned long long)total, sres == 0 ? "ok" : strerror(errno),
                     (unsigned long long)(stream_now_ms() - t_start_ms));
         install_log("[STREAM] WARNING: raw 416 Range Not Satisfiable (total=%llu)", (unsigned long long)total);
+        stream_debug_log_request(conn_id, req_no, peer, method, path, 1, start, end, 416, 0, total);
         return (sres == 0 && keep_wanted) ? SERVE_KEEP : SERVE_CLOSE;
     }
 
@@ -748,6 +755,9 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
         stream_debug_log("[STREAM] conn #%d peer=%s req=%d respond: 200 OK len=%llu head=%d ka=%d (no Range header)",
                          conn_id, peer, req_no, (unsigned long long)total, is_head, keep_wanted);
     }
+    stream_debug_log_request(conn_id, req_no, peer, method, path,
+                             is_range, start, end,
+                             is_range ? 206 : 200, content_length, total);
     if (send_all(conn, hdr, (size_t)hlen) != 0) {
         install_log("[STREAM] conn #%d peer=%s req=%d ERROR: header send failed: %s (elapsed=%llums)",
                     conn_id, peer, req_no, strerror(errno),
@@ -853,6 +863,7 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
                          (unsigned long long)total,
                          (unsigned long long)el, kbps);
     }
+    stream_debug_log_response_done(conn_id, req_no, peer, sent_total, content_length, end_reason);
 
     if (vp != NULL) {
         stream_vs_release();
@@ -901,6 +912,7 @@ static void *listener_fn(void *arg) {
         int conn_id = __sync_add_and_fetch(&g_stream_conn_seq, 1);
         char peer[64];
         stream_format_peer(&cli, peer, sizeof(peer));
+        stream_debug_log_conn_open(conn_id, peer);
         uint64_t total_snapshot;
         pthread_mutex_lock(&g_ss.mutex);
         total_snapshot = g_ss.total_size;
@@ -1087,5 +1099,6 @@ void stream_server_session_stop(void) {
     g_ss.total_size = 0;
     g_ss.session_name[0] = '\0';
     pthread_mutex_unlock(&g_ss.mutex);
+    stream_debug_log_close();
     install_log("[STREAM] raw server stopped");
 }
