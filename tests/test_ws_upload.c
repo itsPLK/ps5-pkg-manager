@@ -247,6 +247,27 @@ static void test_owned_socket_gate(void) {
     reset();
 }
 
+static void test_uploader_disconnect_aborts_session(void) {
+    reset();
+    const int port = 18852;
+    setenv("WS_DIRECT_PORT", "18852", 1);
+    assert(ws_direct_listener_start(port) == 0);
+    int fd = ws_client_connect("127.0.0.1", port, "/ws/upload");
+    assert(fd >= 0);
+    char rep[1024] = {0};
+    assert(ws_client_send_text(fd,
+        "{\"op\":\"init\",\"filename\":\"disconnect.pkg\",\"total\":3000}") == 0);
+    assert(ws_client_recv_text(fd, rep, sizeof(rep)) == 0);
+    assert(strstr(rep, "\"ready\"") != NULL);
+    ws_client_close(fd);
+    for (int i = 0; i < 20 && ws_direct_session_active(); i++) usleep(10000);
+    assert(!ws_direct_session_active());
+    ws_direct_listener_stop();
+    unsetenv("WS_DIRECT_PORT");
+    printf("  uploader-disconnect-aborts ok\n");
+    reset();
+}
+
 static void test_live_socket_roundtrip(void) {
     reset();
     const int port = 18846;
@@ -409,6 +430,7 @@ int main(void) {
     test_resume_and_cancel();
     test_owned_session_isolation();
     test_owned_socket_gate();
+    test_uploader_disconnect_aborts_session();
     test_live_socket_roundtrip();
     test_fragmented_messages();
     test_socket_busy_retry();

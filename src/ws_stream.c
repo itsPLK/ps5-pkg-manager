@@ -325,7 +325,6 @@ static int alloc_slot_locked(uint64_t seg) {
         free_slot = g_lv.slot_of[oldest_seg];
         g_lv.present[oldest_seg] = 0;
         g_lv.slot_of[oldest_seg] = -1;
-        install_log("[WS] live evicted segment %d", oldest_seg);
     }
     if (seg < g_lv.nsegs) {
         g_lv.slot_of[seg] = free_slot;

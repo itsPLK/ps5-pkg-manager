@@ -249,7 +249,11 @@ int ws_direct_cancel_owned(const char *owner, const char *sid) {
         pthread_mutex_unlock(&g_owner_mu);
         return -1;
     }
-    ws_direct_cancel_session();
+    /* Cancel the installer as well as the RAM upload. The browser's unload
+     * beacon can abort the live session before the WebSocket close arrives;
+     * stopping only the session leaves the installer worker running until a
+     * later stream error. */
+    if (installer_cancel() != 0) ws_direct_cancel_session();
     pthread_mutex_unlock(&g_owner_mu);
     return 0;
 }
@@ -575,16 +579,14 @@ static void uplink_seek(uint64_t seg) {
          * self-deadlock on this non-recursive mutex). */
         if (send_text(fd, msg) != 0) {
             install_log("[WS] ERROR: seek send failed: %s", strerror(errno));
-        } else {
-            install_log("[WS] requested browser seek to segment %llu",
-                        (unsigned long long)seg);
         }
     }
     pthread_mutex_unlock(&g_uplink_mu);
 }
 
 static void handle_text_msg(int fd, const char *msg, long *pending_seg,
-                            int *authorized, char *authorized_sid) {
+                            int *authorized, char *authorized_sid,
+                            int *finish_received) {
     char op[32] = {0};
     if (wsj_string(msg, "op", op, sizeof(op)) != 0) {
         send_text_locked(fd, "{\"op\":\"error\",\"error\":\"missing op\"}");
@@ -667,6 +669,7 @@ static void handle_text_msg(int fd, const char *msg, long *pending_seg,
         char rep[768];
         snprintf(rep, sizeof(rep),
                  "{\"op\":\"complete\",\"path\":\"%s\"}", path);
+        *finish_received = 1;
         send_text_locked(fd, rep);
     } else if (strcmp(op, "cancel") == 0) {
         if (!*authorized || !ws_live_check_id(authorized_sid)) { send_text_locked(fd, "{\"op\":\"error\",\"error\":\"Unauthorized\"}"); return; }
@@ -792,6 +795,8 @@ static void *ws_conn_worker(void *arg) {
     size_t bin_cap = 0;
     long pending_seg = -1;
     int authorized = 0;
+    int finish_received = 0;
+    int was_uplink = 0;
     char authorized_sid[WS_DIRECT_SESSION_ID_MAX] = {0};
     unsigned char *rbuf = (unsigned char *)malloc(WS_BIN_MSG_MAX + 1024);
     if (!rbuf) { live_remove(fd); close(fd); return NULL; }
@@ -870,7 +875,8 @@ static void *ws_conn_worker(void *arg) {
             if (fin) {
                 frag_text[frag_tlen] = '\0';
                 n_text++;
-                handle_text_msg(fd, frag_text, &pending_seg, &authorized, authorized_sid);
+                handle_text_msg(fd, frag_text, &pending_seg, &authorized, authorized_sid,
+                                &finish_received);
                 frag_text_on = 0;
                 frag_tlen = 0;
             }
@@ -946,23 +952,11 @@ static void *ws_conn_worker(void *arg) {
                             goto conn_done;
                         }
                         n_acks++;
-                        /* First ack + every ~64 MiB: enough to spot stalls. */
-                        if (n_acks == 1 ||
-                            (bin_bytes % (64ULL * 1024 * 1024)) < frag_bin_total) {
-                            install_log("[WS] progress: seg %llu acked (%llu messages)",
-                                        (unsigned long long)seg,
-                                        (unsigned long long)n_acks);
-                        }
                     } else if (wr == -2) {
                         /* Throttled: a sustained busy storm means the
                          * producer outruns the readers (sequential
                          * overflow); the browser's 50 ms retry absorbs it. */
                         n_busy++;
-                        if (n_busy == 1 || (n_busy % 64) == 0) {
-                            install_log("[WS] ring busy for seg %llu "
-                                        "(%lu times): browser will retry",
-                                        (unsigned long long)seg, n_busy);
-                        }
                         char bm[160];
                         snprintf(bm, sizeof(bm),
                                  "{\"op\":\"busy\",\"seg\":%llu}",
@@ -1007,9 +1001,6 @@ static void *ws_conn_worker(void *arg) {
                      * idle tick closes as before. */
                     int parked = ws_live_waiter_count();
                     if (parked > 0) {
-                        install_log("[WS] conn idle but %d reader(s) parked: "
-                                    "keeping socket alive (%lu text/%lu bin frames)",
-                                    parked, n_text, n_bin);
                         continue;
                     }
                     install_log("[WS] conn idle timeout after %lu text/%lu bin frames (%llu bytes)",
@@ -1025,8 +1016,15 @@ static void *ws_conn_worker(void *arg) {
     }
 conn_done:
     pthread_mutex_lock(&g_uplink_mu);
-    if (g_uplink_fd == fd) g_uplink_fd = -1;
+    if (g_uplink_fd == fd) {
+        was_uplink = 1;
+        g_uplink_fd = -1;
+    }
     pthread_mutex_unlock(&g_uplink_mu);
+    if (was_uplink && authorized && !finish_received) {
+        install_log("[WS] uploader disconnected before completion; canceling install");
+        if (installer_cancel() != 0 && ws_direct_session_active()) ws_direct_cancel_session();
+    }
     free(bin_msg);
     free(rbuf);
     install_log("[WS] connection closed: %lu text/%lu bin frames, %llu bytes, %lu acks, %lu busy",

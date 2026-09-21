@@ -833,9 +833,6 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
         }
         if (n <= 0) {
             end_reason = "read-short";
-            install_log("[STREAM] conn #%d peer=%s body read short at off=%llu want=%zu (res: %zd reason=%s)",
-                        conn_id, peer, (unsigned long long)off, want, n, end_reason);
-            install_log("[STREAM] WARNING: raw read short at %llu (res: %zd)", (unsigned long long)off, n);
             break;
         }
         if (send_all(conn, sbuf, (size_t)n) != 0) {

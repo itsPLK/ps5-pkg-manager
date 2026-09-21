@@ -78,10 +78,8 @@ export function useDirectUpload(tabId) {
       unloadCancelSentRef.current = true;
       cancelUploadOnUnload(getOwner(), sid);
     };
-    window.addEventListener('beforeunload', cancelOnUnload);
     window.addEventListener('pagehide', cancelOnUnload);
     return function () {
-      window.removeEventListener('beforeunload', cancelOnUnload);
       window.removeEventListener('pagehide', cancelOnUnload);
     };
   }, []);
