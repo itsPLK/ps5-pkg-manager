@@ -68,6 +68,7 @@ export function useDirectUpload(tabId) {
   const wsRef = useRef(null);
   const statusTimerRef = useRef(null);
   const checkingRef = useRef(false);
+  const uploadStatusInFlightRef = useRef(false);
   const unloadCancelSentRef = useRef(false);
 
   useEffect(function () {
@@ -176,6 +177,8 @@ export function useDirectUpload(tabId) {
   const pollHeader = useCallback(function (sid, fileSize) {
     stopStatusPoll();
     const tick = async function () {
+      if (uploadStatusInFlightRef.current) return;
+      uploadStatusInFlightRef.current = true;
       try {
         const st = await uploadStatus();
         if (st && st.session_id && sid && st.session_id !== sid) return;
@@ -205,7 +208,9 @@ export function useDirectUpload(tabId) {
             }
           }
         }
-      } catch (e) {}
+      } catch (e) {} finally {
+        uploadStatusInFlightRef.current = false;
+      }
     };
     tick();
     statusTimerRef.current = setInterval(tick, 2000);

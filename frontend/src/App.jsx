@@ -554,6 +554,8 @@ export default function App() {
     showToast,
     initialRoute: selectedDrive ? { type: 'drive', driveId: selectedDrive.id || '__all__' } : { type: 'drives' },
   });
+  const handleCloseDirectInstallRef = useRef(handleCloseDirectInstall);
+  handleCloseDirectInstallRef.current = handleCloseDirectInstall;
 
   const openDirectInstall = useCallback(async () => {
     if (isPlayStation) return false;
@@ -607,9 +609,12 @@ export default function App() {
   }, [directUpload.installing, directUpload.selectFile, directUpload.state, isPlayStation, openDirectInstall]);
 
   useEffect(() => {
-    if (!showDirectInstall) return;
+    if (!showDirectInstall || directUpload.sessionId) return;
     let stopped = false;
+    let checking = false;
     const check = async () => {
+      if (checking) return;
+      checking = true;
       try {
         const status = await uploadStatus();
         if (stopped || !status.active) return;
@@ -619,14 +624,16 @@ export default function App() {
         if (anotherWindow || anotherSession) {
           stopped = true;
           window.alert('Direct Install is active in another window.');
-          handleCloseDirectInstall();
+          handleCloseDirectInstallRef.current();
         }
-      } catch (e) {}
+      } catch (e) {} finally {
+        checking = false;
+      }
     };
     check();
     const timer = setInterval(check, 3000);
     return () => { stopped = true; clearInterval(timer); };
-  }, [showDirectInstall, handleCloseDirectInstall]);
+  }, [directUpload.sessionId, showDirectInstall]);
 
   const isAnyModalOpen = Boolean(
     showDonateModal ||
