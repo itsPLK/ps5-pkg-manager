@@ -555,8 +555,8 @@ export default function App() {
     initialRoute: selectedDrive ? { type: 'drive', driveId: selectedDrive.id || '__all__' } : { type: 'drives' },
   });
 
-  const openDirectInstall = async () => {
-    if (isPlayStation) return;
+  const openDirectInstall = useCallback(async () => {
+    if (isPlayStation) return false;
     try {
       const status = await uploadStatus();
       if (status.active) {
@@ -566,15 +566,45 @@ export default function App() {
         const anotherSession = status.session_id !== sessionStorage.getItem('directInstallSession');
         if (anotherWindow || anotherSession) {
           window.alert('Direct Install is already active in another window. Finish it there first.');
-          return;
+          return false;
         }
       }
     } catch (e) {
       showToast('Could not check Direct Install status', 'error');
-      return;
+      return false;
     }
     handleOpenDirectInstall();
-  };
+    return true;
+  }, [handleOpenDirectInstall, isPlayStation, showToast]);
+
+  useEffect(() => {
+    if (isPlayStation) return;
+
+    const hasFiles = (event) => Array.from(event.dataTransfer?.types || []).includes('Files');
+    const onDragOver = (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+    };
+    const onDrop = async (event) => {
+      if (event.__pkgManagerDropHandled || !hasFiles(event) || !event.dataTransfer?.files?.length) return;
+      event.preventDefault();
+      event.__pkgManagerDropHandled = true;
+
+      // Keep the current page and upload session intact while an install is active.
+      if (directUpload.state === 'uploading' || directUpload.installing) return;
+
+      const file = event.dataTransfer.files[0];
+      if (await openDirectInstall()) directUpload.selectFile(file);
+    };
+
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, [directUpload.installing, directUpload.selectFile, directUpload.state, isPlayStation, openDirectInstall]);
 
   useEffect(() => {
     if (!showDirectInstall) return;

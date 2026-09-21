@@ -19,8 +19,9 @@ export default function DirectInstallView({ up, onBack }) {
       if (!event.relatedTarget) setDragging(false);
     };
     const drop = (event) => {
-      if (!event.dataTransfer?.files?.length) return;
+      if (event.__pkgManagerDropHandled || !event.dataTransfer?.files?.length) return;
       event.preventDefault();
+      event.__pkgManagerDropHandled = true;
       setDragging(false);
       if (canChoose) up.selectFile(event.dataTransfer.files[0]);
     };
