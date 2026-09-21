@@ -533,20 +533,43 @@ export function useHistoryNavigation(props) {
   }, [setShowDirectInstall, setShowSettings, setShowSmbPage]);
 
   const handleCloseDirectInstall = useCallback(() => {
-    if (window.history && showDirectInstallRef.current) {
-      window.history.back();
-    } else {
-      setShowDirectInstall(false);
-      let prevRoute = { type: 'drives' };
-      if (selectedTitleIdRef.current) {
-        prevRoute = { type: 'title', titleId: selectedTitleIdRef.current, driveId: selectedDriveRef.current?.id || '__all__' };
-      } else if (selectedDriveRef.current) {
-        prevRoute = { type: 'drive', driveId: selectedDriveRef.current.id || '__all__' };
-      }
-      currentRouteRef.current = prevRoute;
-      writeHistory(prevRoute, true);
+    if (directTransferActiveRef.current &&
+        !window.confirm('A direct installation is in progress. Leave this page?')) {
+      return;
     }
-  }, [selectedDriveRef, selectedTitleIdRef, setShowDirectInstall]);
+    setShowDirectInstall(false);
+    setShowSettings(false);
+    setShowSmbPage(false);
+    setSelectedDrive(null);
+    selectedDriveRef.current = null;
+    setSelectedTitleId(null);
+    selectedTitleIdRef.current = null;
+    if (setPackages) setPackages([]);
+    if (setSearchQuery) setSearchQuery('');
+    if (fetchDrives) fetchDrives();
+    if (fetchStorage) fetchStorage();
+    scrollPositionRef.current = 0;
+    detailScrollPositionRef.current = 0;
+    shouldRestoreDetailScrollRef.current = false;
+    currentRouteRef.current = { type: 'drives' };
+    writeHistory({ type: 'drives' }, true);
+    window.scrollTo(0, 0);
+  }, [
+    detailScrollPositionRef,
+    fetchDrives,
+    fetchStorage,
+    scrollPositionRef,
+    selectedDriveRef,
+    selectedTitleIdRef,
+    setPackages,
+    setSearchQuery,
+    setSelectedDrive,
+    setSelectedTitleId,
+    setShowDirectInstall,
+    setShowSettings,
+    setShowSmbPage,
+    shouldRestoreDetailScrollRef,
+  ]);
 
   return {
     handleSelectDrive,
