@@ -20,6 +20,65 @@
 #include <unistd.h>
 #include <pthread.h>
 
+static void evaluate_install_eligibility(const pkg_detail_t *pkg, int is_installed,
+                                         const char *installed_version, int dlc_installed,
+                                         int has_leftover, int partial,
+                                         pkg_install_eligibility_t *out) {
+    memset(out, 0, sizeof(*out));
+    out->can_install = 1;
+    out->disabled_reason = "";
+    out->is_installed = is_installed;
+    snprintf(out->installed_version, sizeof(out->installed_version), "%s", installed_version);
+
+    if (pkg->is_multipart && strncmp(pkg->path, "smb://", 6) == 0) {
+        out->can_install = 0;
+        out->disabled_reason = "Multi-part packages are only supported on USB/Disc";
+    } else if (has_leftover) {
+        out->can_install = 0;
+        out->disabled_reason = "Leftovers detected on console. Clean up leftovers before installing.";
+    } else if (pkg->pkg_type == PKG_TYPE_BASE || pkg->pkg_type == PKG_TYPE_UNKNOWN) {
+        if (out->is_installed) {
+            out->can_install = 0;
+            if (out->installed_version[0] && pkg->app_version[0]) {
+                if (app_info_compare_versions(out->installed_version, pkg->app_version) < 0)
+                    out->can_install = 1;
+                else
+                    out->disabled_reason = "Installed version is same or newer";
+            } else {
+                out->disabled_reason = "Application is already installed";
+            }
+        }
+    } else if (pkg->pkg_type == PKG_TYPE_UPDATE || pkg->pkg_type == PKG_TYPE_DLC) {
+        if (!out->is_installed) {
+            out->can_install = 0;
+            out->disabled_reason = partial
+                ? "Base package installation was aborted. Reinstall base package first."
+                : "Base package is not installed";
+        } else if (pkg->pkg_type == PKG_TYPE_UPDATE && out->installed_version[0] &&
+                   pkg->app_version[0] &&
+                   app_info_compare_versions(out->installed_version, pkg->app_version) >= 0) {
+            out->can_install = 0;
+            out->disabled_reason = "Installed version is same or newer";
+        } else if (pkg->pkg_type == PKG_TYPE_DLC && dlc_installed) {
+            out->can_install = 0;
+            out->disabled_reason = "DLC is already installed";
+        }
+    }
+}
+
+void pkg_scanner_check_install_eligibility(const pkg_detail_t *pkg,
+                                           pkg_install_eligibility_t *out) {
+    char installed_version[32] = {0};
+    int is_installed = app_info_check_installed(pkg->title_id, installed_version,
+                                                sizeof(installed_version));
+    int dlc_installed = pkg->pkg_type == PKG_TYPE_DLC && pkg->content_id[0] &&
+        app_info_check_dlc_installed(pkg->title_id, pkg->content_id);
+    int has_leftover = !is_installed && app_info_check_has_leftover(pkg->title_id, NULL, 0);
+    int partial = !is_installed && app_info_check_partially_installed(pkg->title_id, NULL, 0);
+    evaluate_install_eligibility(pkg, is_installed, installed_version, dlc_installed,
+                                 has_leftover, partial, out);
+}
+
 static int compare_pkg_by_title_name(const void *a, const void *b) {
     const pkg_detail_t *pa = (const pkg_detail_t *)a;
     const pkg_detail_t *pb = (const pkg_detail_t *)b;
@@ -1838,57 +1897,11 @@ char *pkg_scanner_packages_for_drive_to_json_ex(const char *drive_id_or_path, co
             is_partially_installed = app_info_check_partially_installed(pkg->title_id, partial_desc, sizeof(partial_desc));
         }
 
-        int can_install = 1;
-        const char *disabled_reason = "";
-
-        if (pkg->is_multipart && strncmp(pkg->path, "smb://", 6) == 0) {
-            can_install = 0;
-            disabled_reason = "Multi-part packages are only supported on USB/Disc";
-        } else if (has_leftover) {
-            can_install = 0;
-            disabled_reason = "Leftovers detected on console. Clean up leftovers before installing.";
-        } else if (pkg->pkg_type == PKG_TYPE_BASE || pkg->pkg_type == PKG_TYPE_UNKNOWN) {
-            if (is_installed) {
-                if (installed_version[0] != '\0' && pkg->app_version[0] != '\0' &&
-                    app_info_compare_versions(installed_version, pkg->app_version) < 0) {
-                    can_install = 1;
-                } else if (installed_version[0] != '\0' && pkg->app_version[0] != '\0') {
-                    can_install = 0;
-                    disabled_reason = "Installed version is same or newer";
-                } else {
-                    can_install = 0;
-                    disabled_reason = "Application is already installed";
-                }
-            }
-            /* If is_partially_installed is true, can_install remains 1 so user can reinstall base package! */
-        } else if (pkg->pkg_type == PKG_TYPE_UPDATE) {
-            if (!is_installed) {
-                can_install = 0;
-                if (is_partially_installed) {
-                    disabled_reason = "Base package installation was aborted. Reinstall base package first.";
-                } else {
-                    disabled_reason = "Base package is not installed";
-                }
-            } else if (installed_version[0] != '\0' && pkg->app_version[0] != '\0') {
-                int cmp = app_info_compare_versions(installed_version, pkg->app_version);
-                if (cmp >= 0) {
-                    can_install = 0;
-                    disabled_reason = "Installed version is same or newer";
-                }
-            }
-        } else if (pkg->pkg_type == PKG_TYPE_DLC) {
-            if (!is_installed) {
-                can_install = 0;
-                if (is_partially_installed) {
-                    disabled_reason = "Base package installation was aborted. Reinstall base package first.";
-                } else {
-                    disabled_reason = "Base package is not installed";
-                }
-            } else if (is_dlc_installed) {
-                can_install = 0;
-                disabled_reason = "DLC is already installed";
-            }
-        }
+        pkg_install_eligibility_t eligibility;
+        evaluate_install_eligibility(pkg, is_installed, installed_version, is_dlc_installed,
+                                     has_leftover, is_partially_installed, &eligibility);
+        int can_install = eligibility.can_install;
+        const char *disabled_reason = eligibility.disabled_reason;
 
         char esc_path[1024];
         char esc_filename[512];

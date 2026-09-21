@@ -158,6 +158,26 @@ int main(void) {
     assert(strstr(json_base_installed, "Installed version is same or newer") != NULL);
     free(json_base_installed);
 
+    /* Direct Install uses the same eligibility check without a scanned drive. */
+    pkg_detail_t direct_pkg = {0};
+    pkg_install_eligibility_t eligibility;
+    snprintf(direct_pkg.title_id, sizeof(direct_pkg.title_id), "CUSA90002");
+    snprintf(direct_pkg.app_version, sizeof(direct_pkg.app_version), "v1.00");
+    direct_pkg.pkg_type = PKG_TYPE_BASE;
+    pkg_scanner_check_install_eligibility(&direct_pkg, &eligibility);
+    assert(!eligibility.can_install);
+    assert(strcmp(eligibility.disabled_reason, "Installed version is same or newer") == 0);
+
+    direct_pkg.pkg_type = PKG_TYPE_UPDATE;
+    snprintf(direct_pkg.app_version, sizeof(direct_pkg.app_version), "v1.06");
+    pkg_scanner_check_install_eligibility(&direct_pkg, &eligibility);
+    assert(eligibility.can_install);
+
+    snprintf(direct_pkg.title_id, sizeof(direct_pkg.title_id), "CUSA90099");
+    pkg_scanner_check_install_eligibility(&direct_pkg, &eligibility);
+    assert(!eligibility.can_install);
+    assert(strcmp(eligibility.disabled_reason, "Base package is not installed") == 0);
+
     /* Step C: Simulate updating base game to v01.06 in mock_appmeta */
     fp = fopen("/tmp/mock_appmeta/CUSA90002/param.json", "w");
     assert(fp != NULL);

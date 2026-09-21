@@ -11,6 +11,17 @@ export async function initUpload(filename, total, owner, sessionId, details) {
   return data;
 }
 
+export async function checkUploadEligibility(details) {
+  const res = await fetch('/api/upload/check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(details)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Could not check package installation');
+  return data;
+}
+
 export async function uploadStatus() {
   const res = await fetch('/api/upload/status');
   if (!res.ok) throw new Error('Status failed: ' + res.status);

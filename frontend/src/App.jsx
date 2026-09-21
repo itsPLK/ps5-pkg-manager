@@ -592,7 +592,7 @@ export default function App() {
       event.__pkgManagerDropHandled = true;
 
       // Keep the current page and upload session intact while an install is active.
-      if (directUpload.state === 'uploading' || directUpload.installing) return;
+      if (directUpload.state === 'uploading' || directUpload.state === 'checking' || directUpload.installing) return;
 
       const file = event.dataTransfer.files[0];
       if (await openDirectInstall()) directUpload.selectFile(file);
@@ -842,6 +842,8 @@ export default function App() {
           <DirectInstallView
             onBack={handleCloseDirectInstall}
             up={directUpload}
+            storage={storage}
+            installerStatus={installerStatus}
           />
         ) : showSmbPage ? (
           <SmbManagementView

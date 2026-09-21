@@ -891,6 +891,37 @@ const server = http.createServer(async (req, res) => {
       req.on('end', () => resolve(b));
     });
     const liveUri = () => 'live:' + mockUpload.id;
+    if (req.method === 'POST' && pathname === '/api/upload/check') {
+      let details = {};
+      try { details = JSON.parse(await readBody() || '{}'); } catch (e) {}
+      if (!details.title_id || !['base', 'update', 'dlc'].includes(details.pkg_type) ||
+        (details.pkg_type === 'dlc' && !details.content_id)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid package metadata' }));
+        return;
+      }
+      const installed = examplePkgs.find((p) => p.title_id === details.title_id && p.is_installed);
+      const dlc = examplePkgs.find((p) => p.content_id === details.content_id && p.is_dlc_installed);
+      const compare = (a, b) => {
+        const parts = (v) => String(v || '').replace(/^v/i, '').split('.').map(Number);
+        const left = parts(a), right = parts(b);
+        for (let i = 0; i < Math.max(left.length, right.length); i++) {
+          if ((left[i] || 0) !== (right[i] || 0)) return (left[i] || 0) - (right[i] || 0);
+        }
+        return 0;
+      };
+      let reason = '';
+      if (details.pkg_type !== 'base' && !installed) reason = 'Base package is not installed';
+      else if (details.pkg_type === 'dlc' && dlc) reason = 'DLC is already installed';
+      else if (installed && details.app_version && installed.installed_version &&
+        compare(installed.installed_version, details.app_version) >= 0 && details.pkg_type !== 'dlc') {
+        reason = 'Installed version is same or newer';
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ can_install: !reason, install_disabled_reason: reason,
+        is_installed: !!installed, installed_version: installed?.installed_version || '' }));
+      return;
+    }
     if (req.method === 'POST' && pathname === '/api/upload/init') {
       const body = await readBody();
       let parsed = {};

@@ -1,13 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { formatBytes } from '../../utils/formatters';
 
-export default function DirectInstallView({ up, onBack }) {
+export default function DirectInstallView({ up, onBack, storage, installerStatus }) {
   const fileRef = useRef(null);
   const [dragging, setDragging] = useState(false);
   const busy = up.state === 'uploading';
-  const canChoose = !busy && !up.installing && up.state !== 'complete' &&
+  const canChoose = !busy && !up.installing && up.state !== 'checking' && up.state !== 'complete' &&
     !(up.state === 'error' && up.sessionId);
   const pct = up.total > 0 ? Math.min(100, Math.round(up.offset / up.total * 100)) : 0;
+  const free = storage ? Math.max(storage.internal?.free ?? storage.free ?? 0,
+    storage.nvme?.available ? storage.nvme.free ?? 0 : 0) : null;
+  const notEnoughSpace = free !== null && up.total > free;
+  const anotherInstallActive = installerStatus?.is_installing && !up.installing && up.state !== 'uploading';
 
   useEffect(() => {
     const over = (event) => {
@@ -81,9 +85,15 @@ export default function DirectInstallView({ up, onBack }) {
         </div>
       )}
 
-      {up.state === 'selected' && (
-        <button type="button" onClick={up.upload}
-          className="w-full px-4 py-3 rounded bg-green-600 hover:bg-green-500 text-white font-semibold cursor-pointer">
+      {up.eligibility?.can_install === false && (
+        <p className="text-sm text-amber-400">{up.eligibility.install_disabled_reason}</p>
+      )}
+      {notEnoughSpace && <p className="text-sm text-amber-400">Not enough storage space to install this package.</p>}
+      {anotherInstallActive && <p className="text-sm text-amber-400">Another package is currently installing.</p>}
+      {up.state === 'checking' && <p className="text-sm text-zinc-400">Checking package installation…</p>}
+      {up.state === 'selected' && up.eligibility?.can_install && (
+        <button type="button" onClick={up.upload} disabled={notEnoughSpace || anotherInstallActive}
+          className="w-full px-4 py-3 rounded bg-green-600 hover:bg-green-500 text-white font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
           Install
         </button>
       )}

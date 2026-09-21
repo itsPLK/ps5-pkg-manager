@@ -195,6 +195,46 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
      * untouched logic below. Chunk bytes travel over the WS listener
      * (:8846, ws_upload.c), never through MHD/Post bodies. */
     if (strncmp(url, "/api/upload/", 12) == 0) {
+        /* Check local package metadata before offering a direct installation. */
+        if (strcmp(method, "POST") == 0 && strcmp(url, "/api/upload/check") == 0) {
+            post_state_t *ps = (post_state_t *)*con_cls;
+            pkg_detail_t pkg = {0};
+            char response[512];
+            unsigned int code = MHD_HTTP_OK;
+            if (!ps || !ps->data ||
+                extract_json_string_value(ps->data, "title_id", pkg.title_id, sizeof(pkg.title_id)) != 0 ||
+                extract_json_string_value(ps->data, "pkg_type", pkg.pkg_type_str, sizeof(pkg.pkg_type_str)) != 0 ||
+                extract_json_string_value(ps->data, "content_id", pkg.content_id, sizeof(pkg.content_id)) != 0 ||
+                extract_json_string_value(ps->data, "app_version", pkg.app_version, sizeof(pkg.app_version)) != 0 ||
+                !pkg.title_id[0] ||
+                (strcmp(pkg.pkg_type_str, "base") != 0 &&
+                 strcmp(pkg.pkg_type_str, "update") != 0 &&
+                 strcmp(pkg.pkg_type_str, "dlc") != 0) ||
+                (strcmp(pkg.pkg_type_str, "dlc") == 0 && !pkg.content_id[0])) {
+                code = MHD_HTTP_BAD_REQUEST;
+                snprintf(response, sizeof(response), "{\"error\":\"Invalid package metadata\"}");
+            } else {
+                pkg.pkg_type = strcmp(pkg.pkg_type_str, "update") == 0 ? PKG_TYPE_UPDATE :
+                               strcmp(pkg.pkg_type_str, "dlc") == 0 ? PKG_TYPE_DLC : PKG_TYPE_BASE;
+                pkg_install_eligibility_t eligibility;
+                pkg_scanner_check_install_eligibility(&pkg, &eligibility);
+                char reason[256], installed_version[96];
+                json_str_esc(eligibility.disabled_reason, reason, sizeof(reason));
+                json_str_esc(eligibility.installed_version, installed_version, sizeof(installed_version));
+                snprintf(response, sizeof(response),
+                         "{\"can_install\":%s,\"install_disabled_reason\":\"%s\","
+                         "\"is_installed\":%s,\"installed_version\":\"%s\"}",
+                         eligibility.can_install ? "true" : "false", reason,
+                         eligibility.is_installed ? "true" : "false", installed_version);
+            }
+            struct MHD_Response *resp = MHD_create_response_from_buffer(
+                strlen(response), response, MHD_RESPMEM_MUST_COPY);
+            add_cors_headers(resp);
+            MHD_add_response_header(resp, "Content-Type", "application/json");
+            enum MHD_Result ret = MHD_queue_response(conn, code, resp);
+            MHD_destroy_response(resp);
+            return ret;
+        }
         /* POST /api/upload/init {"filename":"game.pkg","total":123} */
         if (strcmp(method, "POST") == 0 && strcmp(url, "/api/upload/init") == 0) {
             post_state_t *ps = (post_state_t *)*con_cls;

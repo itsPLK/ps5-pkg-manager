@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { initUpload, uploadStatus, cancelUpload, wsUploadUrl } from '../api/directInstall';
+import { initUpload, uploadStatus, cancelUpload, checkUploadEligibility, wsUploadUrl } from '../api/directInstall';
 import { pollStatus, installPackage } from '../api/installer';
 import { parseLocalPkg } from '../utils/parseLocalPkg';
 
@@ -56,6 +56,7 @@ export function useDirectUpload(tabId) {
   const [installPath, setInstallPath] = useState('');
   const [error, setError] = useState('');
   const [details, setDetails] = useState(null);
+  const [eligibility, setEligibility] = useState(null);
   const [iconUrl, setIconUrl] = useState('');
   const [installing, setInstalling] = useState(false);
   const selectedFileRef = useRef(null);
@@ -66,6 +67,7 @@ export function useDirectUpload(tabId) {
   const cancelRef = useRef(false);
   const wsRef = useRef(null);
   const statusTimerRef = useRef(null);
+  const checkingRef = useRef(false);
 
   const stopStatusPoll = useCallback(function () {
     if (statusTimerRef.current) {
@@ -91,6 +93,7 @@ export function useDirectUpload(tabId) {
     setInstallPath('');
     setError('');
     setDetails(null);
+    setEligibility(null);
     setInstalling(false);
     installStartedRef.current = false;
     selectedFileRef.current = null;
@@ -128,6 +131,8 @@ export function useDirectUpload(tabId) {
         iconUrlRef.current = url;
         setIconUrl(url);
       }
+      const checked = await checkUploadEligibility(parsed);
+      setEligibility(checked);
       setState('selected');
     } catch (e) {
       setError(e.message || 'Could not read package details');
@@ -192,11 +197,31 @@ export function useDirectUpload(tabId) {
 
   const upload = useCallback(async function () {
     const file = selectedFileRef.current;
-    if (!file) return;
+    if (!file || !details || !eligibility?.can_install || checkingRef.current) return;
+    checkingRef.current = true;
+    setState('checking');
+    try {
+      // An existing session may already have started installation; keep resume possible.
+      if (!sessionIdRef.current) {
+        const checked = await checkUploadEligibility(details);
+        setEligibility(checked);
+        if (!checked.can_install) {
+          setState('selected');
+          return;
+        }
+      }
+    } catch (e) {
+      setError(e.message || 'Could not check package installation');
+      setState('selected');
+      return;
+    } finally {
+      checkingRef.current = false;
+    }
     try {
       const lease = JSON.parse(localStorage.getItem('directInstallLease') || '{}');
       if (lease.tab && lease.tab !== tabId && Date.now() - lease.time < 10000) {
         setError('Direct Install is active in another window');
+        setState('selected');
         return;
       }
     } catch (e) {}
@@ -483,9 +508,9 @@ export function useDirectUpload(tabId) {
         setState('error');
       }
     }
-  }, [details, pollHeader, tabId]);
+  }, [details, eligibility, pollHeader, tabId]);
 
   return { state, progress, offset, total, fileName, sessionId, headerReady,
-    installPath, error, details, iconUrl, installing, selectFile, upload, cancel, reset,
+    installPath, error, details, eligibility, iconUrl, installing, selectFile, upload, cancel, reset,
     owner: getOwner() };
 }

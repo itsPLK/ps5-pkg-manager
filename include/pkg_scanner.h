@@ -39,6 +39,17 @@ int pkg_scanner_get_at(size_t index, pkg_detail_t *out);
  */
 int pkg_scanner_find_by_path(const char *path, pkg_detail_t *out);
 
+/* Evaluate a package against the console's current installed state. */
+typedef struct {
+    int can_install;
+    const char *disabled_reason;
+    int is_installed;
+    char installed_version[32];
+} pkg_install_eligibility_t;
+
+void pkg_scanner_check_install_eligibility(const pkg_detail_t *pkg,
+                                           pkg_install_eligibility_t *out);
+
 /**
  * Updates the cached BlurHash placeholder for a package in memory.
  * Returns 0 on success, -1 if not found.
