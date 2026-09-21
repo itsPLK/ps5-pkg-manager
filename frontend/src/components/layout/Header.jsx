@@ -12,6 +12,12 @@ export default function Header({ appVersion, storage, showSettings, showSmbPage,
   const nvmeTotal = hasNvme ? (storage.nvme.total || 1) : 1;
   const nvmeUsed = hasNvme ? (storage.nvme.used ?? Math.max(0, nvmeTotal - nvmeFree)) : 0;
   const nvmeUsedPct = Math.min(100, Math.max(0, (nvmeUsed / nvmeTotal) * 100));
+
+  const hasUsb = !!(storage?.usb && storage.usb.available);
+  const usbFree = hasUsb ? (storage.usb.free ?? 0) : 0;
+  const usbTotal = hasUsb ? (storage.usb.total || 1) : 1;
+  const usbUsed = hasUsb ? (storage.usb.used ?? Math.max(0, usbTotal - usbFree)) : 0;
+  const usbUsedPct = Math.min(100, Math.max(0, (usbUsed / usbTotal) * 100));
   return (
     <header className="border-b border-white/10 bg-[#12131a] px-4 py-3 sm:px-6">
       {/* Top Header Bar (Non-sticky, hides naturally when scrolling down) */}
@@ -89,6 +95,38 @@ export default function Header({ appVersion, storage, showSettings, showSmbPage,
                     <div
                       className="bg-purple-500 h-full rounded-[2px] transition-all duration-500"
                       style={{ width: `${nvmeUsedPct}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* USB Extended Storage Display Widget */}
+            {hasUsb && (
+              <div
+                className="flex items-center space-x-2.5 bg-white/5 px-3 py-1.5 rounded-[2px] border border-white/10 text-xs min-w-[230px]"
+                title={`USB: ${formatBytes(usbFree)} free of ${formatBytes(usbTotal)} (${usbUsedPct.toFixed(1)}% used)`}
+              >
+                <div className="flex flex-col items-center shrink-0">
+                  <svg className="w-4 h-4 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="2" y="3" width="20" height="18" rx="2" />
+                    <path d="M4 7h16M4 12h16M4 17h16" />
+                  </svg>
+                  <span className="text-[9px] font-mono font-bold text-zinc-400 mt-0.5 tracking-wider leading-none">USB</span>
+                </div>
+                <div className="flex flex-col flex-1 min-w-0">
+                  <div className="flex items-center space-x-1.5 font-mono text-[11px] whitespace-nowrap">
+                    <span className="font-bold text-white">
+                      {formatBytes(usbFree)} free
+                    </span>
+                    <span className="text-zinc-500">
+                      / {formatBytes(usbTotal)}
+                    </span>
+                  </div>
+                  <div className="w-full bg-black/60 h-1.5 rounded-[2px] overflow-hidden mt-1 border border-white/10">
+                    <div
+                      className="bg-cyan-500 h-full rounded-[2px] transition-all duration-500"
+                      style={{ width: `${usbUsedPct}%` }}
                     />
                   </div>
                 </div>

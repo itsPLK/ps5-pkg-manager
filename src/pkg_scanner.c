@@ -104,6 +104,7 @@ static int compare_pkg_by_title_name(const void *a, const void *b) {
 
 #define MAX_PACKAGES 4096
 #define MAX_DRIVES   16
+#define PKG_MANIFEST_VERSION 2
 
 static pkg_detail_t g_packages[MAX_PACKAGES];
 static size_t g_package_count = 0;
@@ -255,7 +256,7 @@ static int save_manifest_locked(void) {
     FILE *f = fopen(tmp_path, "w");
     if (!f) return -1;
 
-    fprintf(f, "{\n  \"version\": 1,\n  \"drives\": [\n");
+    fprintf(f, "{\n  \"version\": %d,\n  \"drives\": [\n", PKG_MANIFEST_VERSION);
     for (size_t i = 0; i < g_drive_count; i++) {
         const pkg_drive_t *d = &g_drives[i];
         char esc_id[64], esc_label[128], esc_path[512], esc_type[32];
@@ -373,6 +374,15 @@ static int load_manifest_locked(void) {
     size_t rd = fread(buf, 1, (size_t)fsize, f);
     fclose(f);
     buf[rd] = '\0';
+
+    char manifest_version[16] = {0};
+    extract_json_field(buf, "version", manifest_version, sizeof(manifest_version));
+    if (atoi(manifest_version) != PKG_MANIFEST_VERSION) {
+        /* Package classification rules changed; force a fresh scan rather
+         * than reusing entries produced by an older parser. */
+        free(buf);
+        return -1;
+    }
 
     /* Parse drives */
     g_drive_count = 0;

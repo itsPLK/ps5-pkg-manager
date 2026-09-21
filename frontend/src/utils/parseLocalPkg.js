@@ -46,7 +46,9 @@ function jsonDetails(bytes) {
     title_name: data.titleName || data.title || preferred.titleName || '',
     title_id: data.titleId || '',
     app_version: data.contentVersion || data.appVersion || data.version || '',
-    category: data.category || ''
+    category: data.category || '',
+    has_base_app_metadata: ['applicationDrmType', 'applicationCategoryType', 'contentBadgeType']
+      .some((key) => Object.prototype.hasOwnProperty.call(data, key))
   };
 }
 
@@ -64,6 +66,7 @@ export async function parseLocalPkg(file) {
   const header = await read(file, cnt, 128);
   if (text(header.subarray(0, 4)) !== '\x7fCNT') throw new Error('CNT header not found');
   const hv = new DataView(header.buffer);
+  const cntType = hv.getUint32(0x04, false);
   const count = hv.getUint32(0x10, false);
   const tableOffset = hv.getUint32(0x18, false);
   if (!count || count > 2048 || tableOffset > 0x200000) throw new Error('Invalid package entry table');
@@ -71,7 +74,8 @@ export async function parseLocalPkg(file) {
   const ev = new DataView(entries.buffer);
   const result = {
     title_name: '', title_id: '', app_version: '', pkg_type: 'base',
-    content_id: text(header.subarray(0x40, 0x70)), icon_offset: 0, icon_size: 0
+    content_id: text(header.subarray(0x40, 0x70)), icon_offset: 0, icon_size: 0,
+    has_base_app_metadata: false
   };
   const rows = [];
   let stringTable = null;
@@ -113,7 +117,8 @@ export async function parseLocalPkg(file) {
     if (row.type === 0x1008 || row.type === 0x0407 || row.type === 0x0408) result.pkg_type = 'update';
   }
   if (result.pkg_type !== 'update') {
-    if (category.startsWith('gp')) result.pkg_type = 'update';
+    if ((cntType & 0xff) === 1 && !result.has_base_app_metadata) result.pkg_type = 'dlc';
+    else if (category.startsWith('gp')) result.pkg_type = 'update';
     else if (category.startsWith('ac') || category.startsWith('al')) result.pkg_type = 'dlc';
   }
   if (!result.title_id) {

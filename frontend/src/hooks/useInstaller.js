@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { pollStatus, installPackage, cancelInstall } from '../api/installer';
 import { formatBytes, formatEta } from '../utils/formatters';
+import { getInstallStorageOptions } from '../utils/installStorage';
 
 export function useInstaller(props) {
   const showToast = props.showToast;
@@ -195,28 +196,16 @@ export function useInstaller(props) {
     try { localStorage.removeItem('pkg_batch_install'); } catch (e) {}
     setBatchInstall(null);
 
-    // Available-storage check: if an M.2 NVMe SSD is installed, PS5 may be set to install
-    // to internal storage or M.2 SSD. If neither drive has enough available space, block the installation.
-    // If no M.2 SSD is present, enforce available storage check against internal storage.
-    const hasNvme = !!(storage?.nvme && storage.nvme.available);
-    const internalFree = storage ? (storage.internal?.free ?? storage.free ?? 0) : 0;
-    const nvmeFree = hasNvme ? (storage.nvme?.free ?? 0) : 0;
-    const maxAvailable = hasNvme ? Math.max(internalFree, nvmeFree) : internalFree;
+    // PS4 packages may install to Internal, M.2, or USB extended storage.
+    // PS5 packages may install only to Internal or M.2.
+    const storageOptions = getInstallStorageOptions(storage, pkg.title_id || selectedTitle?.title_id);
+    const maxAvailable = storageOptions.reduce((max, option) => Math.max(max, option.free), 0);
     const requiredSpace = Number(pkg.total_pkg_size || pkg.file_size) || 0;
 
     if (storage && maxAvailable < requiredSpace) {
       if (showToast) {
-        if (hasNvme) {
-          showToast(
-            `Insufficient storage! Needs ${formatBytes(requiredSpace)}, but neither Internal (${formatBytes(internalFree)}) nor M.2 NVMe (${formatBytes(nvmeFree)}) has enough space.`,
-            'error'
-          );
-        } else {
-          showToast(
-            `Insufficient storage! Needs ${formatBytes(requiredSpace)}, but only ${formatBytes(internalFree)} is available on internal storage.`,
-            'error'
-          );
-        }
+        const available = storageOptions.map((option) => `${option.label} (${formatBytes(option.free)})`).join(' or ');
+        showToast(`Insufficient storage! Needs ${formatBytes(requiredSpace)}, but none of these locations has enough space: ${available}.`, 'error');
       }
       return;
     }
@@ -254,24 +243,16 @@ export function useInstaller(props) {
     const baseRequired = Number(basePkg.total_pkg_size || basePkg.file_size) || 0;
     const updateRequired = Number(updatePkg.total_pkg_size || updatePkg.file_size) || 0;
     const combinedSpace = baseRequired + updateRequired;
-    const hasNvme = !!(storage?.nvme && storage.nvme.available);
-    const internalFree = storage ? (storage.internal?.free ?? storage.free ?? 0) : 0;
-    const nvmeFree = hasNvme ? (storage.nvme?.free ?? 0) : 0;
-    const maxAvailable = hasNvme ? Math.max(internalFree, nvmeFree) : internalFree;
+    const storageOptions = getInstallStorageOptions(
+      storage,
+      updatePkg.title_id || basePkg.title_id || selectedTitle?.title_id
+    );
+    const maxAvailable = storageOptions.reduce((max, option) => Math.max(max, option.free), 0);
 
     if (storage && maxAvailable < combinedSpace) {
       if (showToast) {
-        if (hasNvme) {
-          showToast(
-            `Insufficient storage! Needs ${formatBytes(combinedSpace)}, but neither Internal (${formatBytes(internalFree)}) nor M.2 NVMe (${formatBytes(nvmeFree)}) has enough space.`,
-            'error'
-          );
-        } else {
-          showToast(
-            `Insufficient storage! Needs ${formatBytes(combinedSpace)}, but only ${formatBytes(internalFree)} is available on internal storage.`,
-            'error'
-          );
-        }
+        const available = storageOptions.map((option) => `${option.label} (${formatBytes(option.free)})`).join(' or ');
+        showToast(`Insufficient storage! Needs ${formatBytes(combinedSpace)}, but none of these locations has enough space: ${available}.`, 'error');
       }
       return;
     }

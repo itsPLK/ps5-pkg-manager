@@ -457,6 +457,14 @@ const mockStorage = {
     used: 574508000000,
     path: '/mnt/ext1',
     label: 'M.2 NVMe'
+  },
+  usb: {
+    available: true,
+    free: 512589000000,
+    total: 1000398000000,
+    used: 488089000000,
+    path: '/mnt/ext0',
+    label: 'USB'
   }
 };
 

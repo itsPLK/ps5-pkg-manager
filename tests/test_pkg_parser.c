@@ -53,6 +53,23 @@ int main(void) {
     assert(detail2.pkg_type == PKG_TYPE_BASE);
     assert(strcmp(detail2.pkg_type_str, "base") == 0);
 
+    /* PS5 DLC metadata variant: the CNT package-type word may be 0x00020001, not
+     * exactly 1, and param.json may still carry a base-like category. */
+    const char *pkg2_dlc = "/tmp/test_parser_fixtures/wc_dlc_variant.pkg";
+    assert(fixture_write_ps5_pkg(pkg2_dlc, "TEST00012", "Synthetic DLC Package", "gd",
+                                 "01.000.000", 0) == 0);
+    FILE *dlc_file = fopen(pkg2_dlc, "r+b");
+    assert(dlc_file != NULL);
+    assert(fseek(dlc_file, 0x10004, SEEK_SET) == 0); /* CNT offset + 0x04 */
+    const unsigned char dlc_type[] = {0x00, 0x02, 0x00, 0x01};
+    assert(fwrite(dlc_type, 1, sizeof(dlc_type), dlc_file) == sizeof(dlc_type));
+    fclose(dlc_file);
+
+    pkg_detail_t detail2_dlc;
+    assert(pkg_parser_parse(pkg2_dlc, &detail2_dlc) == 0);
+    assert(detail2_dlc.pkg_type == PKG_TYPE_DLC);
+    assert(strcmp(detail2_dlc.pkg_type_str, "dlc") == 0);
+
     /* Test icon extraction on pkg2 */
     uint8_t *icon_data = NULL;
     size_t icon_size = 0;
@@ -194,4 +211,3 @@ int main(void) {
     printf("\n>>> ALL PKG PARSER TESTS (6 PACKAGES + MULTIPART TYPES + MULTILANG) PASSED! <<<\n");
     return 0;
 }
-

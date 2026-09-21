@@ -52,6 +52,7 @@ void install_log_set_file_path(const char *path);
 void installer_shutdown(void);
 int system_get_storage_info(uint64_t *out_free, uint64_t *out_total, uint64_t *out_used);
 int system_get_nvme_storage_info(uint64_t *out_free, uint64_t *out_total, uint64_t *out_used);
+int system_get_usb_storage_info(uint64_t *out_free, uint64_t *out_total, uint64_t *out_used);
 
 #ifdef __cplusplus
 }

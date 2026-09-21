@@ -299,7 +299,7 @@ The package parser inspects packages directly on storage media using random-acce
 - **SFO & JSON Parser**: Reads `param.sfo` (for PS4 titles) or `param.json` (for PS5 native titles) from the CNT entry directory table to extract localized Title Name, Application Version, and Category.
 - **Package Category Classification**:
   - **Update**: `category` starting with `gp`, presence of playgo chunk patch (`app/playgo-chunk.dat` / entry `0x1008`), delta patch entries (`0x0407`, `0x0408`), or delta content type magic (`0x1E`, `0x41000000`).
-  - **DLC / Extra Content**: `category` starting with `ac`, `al`, equal to `addcont`, or CNT type magic `1`.
+  - **DLC / Extra Content**: `category` starting with `ac`, `al`, equal to `addcont`, or a CNT type whose low byte is `1` when `param.json` does not contain the standard base-application metadata fields. This avoids treating normal base packages that share the CNT value as DLC.
   - **Base App**: `category` starting with `gd`, `bd`, `gc`, `wt`, or default fallback when no update/DLC indicators are present.
 - **Icon Extraction**: Locates uncompressed `icon0.png` data (entry type `0x1200` or named `icon0.png`) and serves it via `/api/icon?path=...`.
 

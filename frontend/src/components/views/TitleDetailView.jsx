@@ -1,6 +1,7 @@
 import React from 'react';
 import BlurIcon from '../../BlurIcon';
 import { formatBytes, formatVersion } from '../../utils/formatters';
+import { getInstallStorageOptions } from '../../utils/installStorage';
 
 export default function TitleDetailView({ title: selectedTitle, onBack, onInstall, onInstallBaseAndUpdate, onOpenLeftoverCleanup, installerStatus, storage, settings, drives, selectedDrive }) {
   const handleBackToPackages = onBack;
@@ -8,10 +9,8 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
   const handleInstallBaseAndUpdate = onInstallBaseAndUpdate;
   const handleOpenLeftoverCleanupForTitle = onOpenLeftoverCleanup;
   const sDrive = selectedDrive || { id: '__all__', label: 'All Sources' };
-  const hasNvme = !!(storage?.nvme && storage.nvme.available);
-  const internalFree = storage ? (storage.internal?.free ?? storage.free ?? 0) : 0;
-  const nvmeFree = hasNvme ? (storage.nvme?.free ?? 0) : 0;
-  const maxAvailable = hasNvme ? Math.max(internalFree, nvmeFree) : internalFree;
+  const maxAvailableFor = (titleId) => getInstallStorageOptions(storage, titleId)
+    .reduce((max, option) => Math.max(max, option.free), 0);
   
   return (
           <div className="max-w-6xl mx-auto px-4 sm:px-8 space-y-6 pb-12">
@@ -275,6 +274,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                     const updTotalParts = Number(pkg.total_parts) || 1;
                     const updFullSize = Number(pkg.total_pkg_size || pkg.file_size) || 0;
                     const requiredSpace = updFullSize;
+                    const maxAvailable = maxAvailableFor(pkg.title_id || selectedTitle.title_id);
                     const notEnoughSpace = !!storage && maxAvailable < requiredSpace;
                     const canInstall = pkg.can_install !== false;
                     const isInstallDisabled = !canInstall || notEnoughSpace || installerStatus.is_installing;
@@ -392,6 +392,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                     const dlcTotalParts = Number(pkg.total_parts) || 1;
                     const dlcFullSize = Number(pkg.total_pkg_size || pkg.file_size) || 0;
                     const requiredSpace = dlcFullSize;
+                    const maxAvailable = maxAvailableFor(pkg.title_id || selectedTitle.title_id);
                     const notEnoughSpace = !!storage && maxAvailable < requiredSpace;
                     const canInstall = pkg.can_install !== false;
                     const isInstallDisabled = !canInstall || notEnoughSpace || installerStatus.is_installing;
@@ -530,6 +531,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                     const otherTotalParts = Number(pkg.total_parts) || 1;
                     const otherFullSize = Number(pkg.total_pkg_size || pkg.file_size) || 0;
                     const requiredSpace = otherFullSize;
+                    const maxAvailable = maxAvailableFor(pkg.title_id || selectedTitle.title_id);
                     const notEnoughSpace = !!storage && maxAvailable < requiredSpace;
                     const canInstall = pkg.can_install !== false;
                     const isInstallDisabled = !canInstall || notEnoughSpace || installerStatus.is_installing;

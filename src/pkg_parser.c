@@ -85,6 +85,17 @@ static int json_extract_key(const char *json, size_t json_len, const char *key, 
     return -1;
 }
 
+/* Length-bounded key presence check for numeric and string JSON fields. */
+static int json_has_key(const char *json, size_t json_len, const char *key) {
+    char pattern[128];
+    int n = snprintf(pattern, sizeof(pattern), "\"%s\"", key ? key : "");
+    if (!json || !key || n <= 0 || (size_t)n >= sizeof(pattern)) return 0;
+    for (size_t i = 0; i + (size_t)n <= json_len; i++) {
+        if (memcmp(json + i, pattern, (size_t)n) == 0) return 1;
+    }
+    return 0;
+}
+
 /* Helper to extract value string for a specific key from a flat JSON object {"k":"v", ...} */
 static int extract_val_for_key(const char *json, const char *key, char *out, size_t out_max) {
     char pattern[64];
@@ -958,6 +969,7 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
 
     int has_playgo_chunk_patch = 0;
     int has_delta_patch = 0;
+    int has_base_app_metadata = 0;
 
     /* Iterate entries to find param.json, param.sfo, and icon0.png */
     for (uint32_t i = 0; i < entry_count; i++) {
@@ -986,6 +998,11 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
             if (json_buf) {
                 if (pread(fd, json_buf, data_sz, cnt_offset + data_off) == (ssize_t)data_sz) {
                     json_buf[data_sz] = '\0';
+                    if (json_has_key(json_buf, data_sz, "applicationDrmType") ||
+                        json_has_key(json_buf, data_sz, "applicationCategoryType") ||
+                        json_has_key(json_buf, data_sz, "contentBadgeType")) {
+                        has_base_app_metadata = 1;
+                    }
                     pkg_parser_parse_param_json(json_buf, data_sz,
                                                 out->title_id, sizeof(out->title_id),
                                                 out->title_name, sizeof(out->title_name),
@@ -1042,6 +1059,12 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
     if (has_playgo_chunk_patch || has_delta_patch || is_delta_type ||
         (out->category[0] != '\0' && strncmp(out->category, "gp", 2) == 0)) {
         out->pkg_type = PKG_TYPE_UPDATE;
+    } else if ((cnt_type_magic & 0xFF) == 1 && !has_base_app_metadata) {
+        /* Some PS5 DLC metadata variants omit param.json.category and the
+         * normal application fields. The CNT field carries flags in its
+         * upper bytes, so only inspect its low-byte type after excluding a
+         * normal base-application param.json. */
+        out->pkg_type = PKG_TYPE_DLC;
     } else if (out->category[0] != '\0') {
         if (strncmp(out->category, "ac", 2) == 0 || strncmp(out->category, "al", 2) == 0 ||
             strcmp(out->category, "addcont") == 0) {
@@ -1050,8 +1073,6 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
                    strncmp(out->category, "gc", 2) == 0 || strncmp(out->category, "wt", 2) == 0) {
             out->pkg_type = PKG_TYPE_BASE;
         }
-    } else if (cnt_type_magic == 1) {
-        out->pkg_type = PKG_TYPE_DLC;
     }
 
     if (out->pkg_type == PKG_TYPE_UNKNOWN) {
@@ -1298,6 +1319,7 @@ int pkg_parser_parse_mem(const uint8_t *data, size_t data_len,
 
     int has_playgo_chunk_patch = 0;
     int has_delta_patch = 0;
+    int has_base_app_metadata = 0;
     for (uint32_t i = 0; i < entry_count; i++) {
         const uint8_t *e = entry_table + i * 32;
         uint32_t type = read_be32(e);
@@ -1327,6 +1349,11 @@ int pkg_parser_parse_mem(const uint8_t *data, size_t data_len,
         if ((type == 0x2000 || strcmp(name, "param.json") == 0) && data_sz > 0 && data_sz < 262144) {
             const uint8_t *jb = mem_slice(data, data_len, cnt_offset + data_off, data_sz);
             if (jb) {
+                if (json_has_key((const char *)jb, data_sz, "applicationDrmType") ||
+                    json_has_key((const char *)jb, data_sz, "applicationCategoryType") ||
+                    json_has_key((const char *)jb, data_sz, "contentBadgeType")) {
+                    has_base_app_metadata = 1;
+                }
                 char tid[PKG_TITLE_ID_LEN] = {0};
                 char tname[PKG_TITLE_NAME_LEN] = {0};
                 if (json_extract_key((const char *)jb, data_sz, "titleId", tid, sizeof(tid)) == 0) {
@@ -1400,6 +1427,8 @@ int pkg_parser_parse_mem(const uint8_t *data, size_t data_len,
     if (has_playgo_chunk_patch || has_delta_patch || is_delta_type ||
         (out->category[0] != '\0' && strncmp(out->category, "gp", 2) == 0)) {
         out->pkg_type = PKG_TYPE_UPDATE;
+    } else if ((cnt_type_magic & 0xFF) == 1 && !has_base_app_metadata) {
+        out->pkg_type = PKG_TYPE_DLC;
     } else if (out->category[0] != '\0') {
         if (strncmp(out->category, "ac", 2) == 0 || strncmp(out->category, "al", 2) == 0 ||
             strcmp(out->category, "addcont") == 0) {
@@ -1408,8 +1437,6 @@ int pkg_parser_parse_mem(const uint8_t *data, size_t data_len,
                    strncmp(out->category, "gc", 2) == 0 || strncmp(out->category, "wt", 2) == 0) {
             out->pkg_type = PKG_TYPE_BASE;
         }
-    } else if (cnt_type_magic == 1) {
-        out->pkg_type = PKG_TYPE_DLC;
     }
 
     if (out->pkg_type == PKG_TYPE_UNKNOWN) {

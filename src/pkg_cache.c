@@ -249,9 +249,11 @@ int pkg_cache_calc_checksum(const char *pkg_path, char *out_checksum, size_t out
     size_t rd = fread(hdr, 1, sizeof(hdr), f);
     fclose(f);
 
-    uint32_t crc = 0;
+    uint32_t crc = (uint32_t)mz_crc32(MZ_CRC32_INIT,
+                                      (const unsigned char *)PKG_CACHE_FORMAT_TAG,
+                                      sizeof(PKG_CACHE_FORMAT_TAG) - 1);
     if (rd > 0) {
-        crc = (uint32_t)mz_crc32(MZ_CRC32_INIT, hdr, rd);
+        crc = (uint32_t)mz_crc32(crc, hdr, rd);
     }
 
     /* Checksum: 32 hex characters combining mtime (8 hex), file_size (16 hex), header CRC (8 hex) */

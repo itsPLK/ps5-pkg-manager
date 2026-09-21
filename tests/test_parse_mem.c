@@ -73,6 +73,30 @@ static void test_ps4_mem(void) {
     free(buf);
 }
 
+static void test_ps5_cnt_type_dlc(void) {
+    const char *p = PM_DIR "/ps5_dlc_variant.pkg";
+    assert(fixture_write_ps5_pkg(p, "TEST00015", "Synthetic DLC Package", "gd",
+                                 "01.000.000", 0) == 0);
+    FILE *f = fopen(p, "r+b");
+    assert(f);
+    assert(fseek(f, 0x10004, SEEK_SET) == 0);
+    const unsigned char dlc_type[] = {0x00, 0x02, 0x00, 0x01};
+    assert(fwrite(dlc_type, 1, sizeof(dlc_type), f) == sizeof(dlc_type));
+    fclose(f);
+
+    pkg_detail_t file_d;
+    assert(pkg_parser_parse(p, &file_d) == 0);
+    assert(file_d.pkg_type == PKG_TYPE_DLC);
+
+    size_t len = 0;
+    uint8_t *buf = read_file(p, &len);
+    pkg_detail_t mem_d;
+    assert(pkg_parser_parse_mem(buf, len, len, "MemDlc.pkg", &mem_d, NULL) == 0);
+    assert(mem_d.pkg_type == PKG_TYPE_DLC);
+    assert(strcmp(mem_d.pkg_type_str, "dlc") == 0);
+    free(buf);
+}
+
 static void test_truncated_fails(void) {
     const char *p = PM_DIR "/ps5.pkg";
     size_t len = 0;
@@ -119,6 +143,7 @@ int main(void) {
     assert(system("rm -rf " PM_DIR " && mkdir -p " PM_DIR) == 0);
     test_ps5_mem();
     test_ps4_mem();
+    test_ps5_cnt_type_dlc();
     test_truncated_fails();
     test_multipart_mem();
     printf("\n>>> ALL PARSE_MEM TESTS PASSED! <<<\n");

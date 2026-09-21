@@ -484,15 +484,21 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         uint64_t nvme_free = 0, nvme_total = 0, nvme_used = 0;
         int nvme_avail = (system_get_nvme_storage_info(&nvme_free, &nvme_total, &nvme_used) == 0);
 
-        char buf[512];
+        uint64_t usb_free = 0, usb_total = 0, usb_used = 0;
+        int usb_avail = (system_get_usb_storage_info(&usb_free, &usb_total, &usb_used) == 0);
+
+        char buf[768];
         snprintf(buf, sizeof(buf),
                  "{\"free\":%llu,\"total\":%llu,\"used\":%llu,\"path\":\"/data\",\"label\":\"Internal\","
                  "\"internal\":{\"free\":%llu,\"total\":%llu,\"used\":%llu,\"path\":\"/data\",\"label\":\"Internal\"},"
-                 "\"nvme\":{\"available\":%s,\"free\":%llu,\"total\":%llu,\"used\":%llu,\"path\":\"/mnt/ext1\",\"label\":\"M.2 NVMe\"}}",
+                 "\"nvme\":{\"available\":%s,\"free\":%llu,\"total\":%llu,\"used\":%llu,\"path\":\"/mnt/ext1\",\"label\":\"M.2 NVMe\"},"
+                 "\"usb\":{\"available\":%s,\"free\":%llu,\"total\":%llu,\"used\":%llu,\"path\":\"/mnt/ext0\",\"label\":\"USB\"}}",
                  (unsigned long long)free_b, (unsigned long long)total_b, (unsigned long long)used_b,
                  (unsigned long long)free_b, (unsigned long long)total_b, (unsigned long long)used_b,
                  nvme_avail ? "true" : "false",
-                 (unsigned long long)nvme_free, (unsigned long long)nvme_total, (unsigned long long)nvme_used);
+                 (unsigned long long)nvme_free, (unsigned long long)nvme_total, (unsigned long long)nvme_used,
+                 usb_avail ? "true" : "false",
+                 (unsigned long long)usb_free, (unsigned long long)usb_total, (unsigned long long)usb_used);
         struct MHD_Response *resp = MHD_create_response_from_buffer(
             strlen(buf), (void *)buf, MHD_RESPMEM_MUST_COPY);
         add_cors_headers(resp);

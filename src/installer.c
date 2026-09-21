@@ -155,6 +155,55 @@ static uint64_t get_available_disk_space(const char *path) {
     return (uint64_t)-1;
 }
 
+static int title_id_has_prefix(const char *title_id, const char *prefix) {
+    return title_id && prefix && strncasecmp(title_id, prefix, 4) == 0;
+}
+
+static int package_is_ps4(const pkg_detail_t *detail) {
+    return detail && title_id_has_prefix(detail->title_id, "CUSA");
+}
+
+/* Validate the destinations the console can use for this package. PS4 titles
+ * can use USB extended storage; PS5 titles are restricted to internal/M.2. */
+static int validate_install_storage(const pkg_detail_t *detail, uint64_t required_space) {
+    uint64_t nvme_f = 0, nvme_t = 0, nvme_u = 0;
+    uint64_t usb_f = 0, usb_t = 0, usb_u = 0;
+    int has_nvme = (system_get_nvme_storage_info(&nvme_f, &nvme_t, &nvme_u) == 0);
+    int has_usb = package_is_ps4(detail) &&
+                  (system_get_usb_storage_info(&usb_f, &usb_t, &usb_u) == 0);
+
+    const char *check_dir = getenv("PKG_TMP_DIR");
+    if (!check_dir || check_dir[0] == '\0') check_dir = "/data";
+
+    uint64_t internal_f = get_available_disk_space(check_dir);
+    int has_internal = (internal_f != (uint64_t)-1);
+    uint64_t max_avail = has_internal ? internal_f : 0;
+    if (has_nvme && nvme_f > max_avail) max_avail = nvme_f;
+    if (has_usb && usb_f > max_avail) max_avail = usb_f;
+
+    if ((has_internal || has_nvme || has_usb) && max_avail < required_space) {
+        if (package_is_ps4(detail)) {
+            ps5_notify("Not enough storage space! Need %llu MB (Internal: %llu MB, M.2: %llu MB, USB: %llu MB)",
+                       (unsigned long long)(required_space / (1024 * 1024)),
+                       (unsigned long long)((has_internal ? internal_f : 0) / (1024 * 1024)),
+                       (unsigned long long)((has_nvme ? nvme_f : 0) / (1024 * 1024)),
+                       (unsigned long long)((has_usb ? usb_f : 0) / (1024 * 1024)));
+        } else if (has_nvme) {
+            ps5_notify("Not enough storage space! Need %llu MB (Internal: %llu MB, M.2: %llu MB)",
+                       (unsigned long long)(required_space / (1024 * 1024)),
+                       (unsigned long long)((has_internal ? internal_f : 0) / (1024 * 1024)),
+                       (unsigned long long)(nvme_f / (1024 * 1024)));
+        } else {
+            ps5_notify("Not enough storage space! Need %llu MB, have %llu MB",
+                       (unsigned long long)(required_space / (1024 * 1024)),
+                       (unsigned long long)((has_internal ? internal_f : 0) / (1024 * 1024)));
+        }
+        return -10;
+    }
+
+    return 0;
+}
+
 static void *installer_monitor_worker(void *arg) {
     (void)arg;
     /* Intentionally passive: tests require that the browser is NOT
@@ -1289,38 +1338,11 @@ int installer_start(const char *pkg_path) {
         return -13;
     }
 
-    /* Validate storage space: requires only 1x storage (installed package size).
-     * If an M.2 NVMe SSD (/mnt/ext1) is present, PS5 may be set to install to internal storage
-     * or the M.2 drive. If neither drive has enough available space, block the installation.
-     * If no M.2 SSD is present, validate against internal storage (/data). */
-    uint64_t nvme_f = 0, nvme_t = 0, nvme_u = 0;
-    int has_nvme = (system_get_nvme_storage_info(&nvme_f, &nvme_t, &nvme_u) == 0);
+    /* Validate against every storage destination supported by this package's
+     * platform. PS4 can use USB (/mnt/ext0); PS5 cannot. */
     uint64_t required_space = detail.total_pkg_size > 0 ? detail.total_pkg_size : detail.file_size;
-    const char *check_dir = getenv("PKG_TMP_DIR");
-    if (!check_dir || check_dir[0] == '\0') {
-        check_dir = "/data";
-    }
-
-    uint64_t avail_space = get_available_disk_space(check_dir);
-    int int_valid = (avail_space != (uint64_t)-1);
-    uint64_t max_avail = int_valid ? avail_space : 0;
-    if (has_nvme && nvme_f > max_avail) {
-        max_avail = nvme_f;
-    }
-
-    if ((int_valid || has_nvme) && max_avail < required_space) {
-        if (has_nvme) {
-            ps5_notify("Not enough storage space! Need %llu MB (Internal: %llu MB, M.2: %llu MB)",
-                       (unsigned long long)(required_space / (1024 * 1024)),
-                       (unsigned long long)((int_valid ? avail_space : 0) / (1024 * 1024)),
-                       (unsigned long long)(nvme_f / (1024 * 1024)));
-        } else {
-            ps5_notify("Not enough storage space! Need %llu MB, have %llu MB",
-                       (unsigned long long)(required_space / (1024 * 1024)),
-                       (unsigned long long)(avail_space / (1024 * 1024)));
-        }
-        return -10; /* Insufficient storage space */
-    }
+    int storage_check = validate_install_storage(&detail, required_space);
+    if (storage_check != 0) return storage_check;
 
     /* Ensure staging directory exists for multi-part packages */
     if (detail.is_multipart) {
@@ -1515,15 +1537,11 @@ int installer_start_live(const char *live_uri) {
     strncpy(live_path_copy, live_uri, sizeof(live_path_copy) - 1);
     live_path_copy[sizeof(live_path_copy) - 1] = '\0';
 
-    /* 1x space: installed output only, no spool copy. */
+    /* 1x space: installed output only, no spool copy. USB is eligible for
+     * PS4 live installs too, while PS5 remains limited to internal/M.2. */
     uint64_t required_space = detail.total_pkg_size > 0 ? detail.total_pkg_size : live_total;
-    uint64_t avail_space = get_available_disk_space("/data");
-    if (avail_space != (uint64_t)-1 && avail_space < required_space) {
-        ps5_notify("Not enough storage space! Need %llu MB, have %llu MB",
-                   (unsigned long long)(required_space / (1024 * 1024)),
-                   (unsigned long long)avail_space / (1024 * 1024));
-        return -10;
-    }
+    int storage_check = validate_install_storage(&detail, required_space);
+    if (storage_check != 0) return storage_check;
 
     pthread_mutex_lock(&g_installer_mutex);
     if (g_status.is_installing) {
@@ -1746,16 +1764,21 @@ int system_get_storage_info(uint64_t *out_free, uint64_t *out_total, uint64_t *o
     return 0;
 }
 
-int system_get_nvme_storage_info(uint64_t *out_free, uint64_t *out_total, uint64_t *out_used) {
+static int system_get_external_storage_info(const char *env_name,
+                                            const char *default_path,
+                                            const char *force_fail_env,
+                                            uint64_t *out_free,
+                                            uint64_t *out_total,
+                                            uint64_t *out_used) {
     if (!out_free || !out_total || !out_used) return -1;
     *out_free = 0;
     *out_total = 0;
     *out_used = 0;
 
-    const char *env_path = getenv("PKG_EXT1_DIR");
-    const char *ext_path = (env_path && env_path[0] != '\0') ? env_path : "/mnt/ext1";
+    const char *env_path = getenv(env_name);
+    const char *ext_path = (env_path && env_path[0] != '\0') ? env_path : default_path;
 
-    if (getenv("PKG_FORCE_NVME_SPACE_FAIL")) {
+    if (force_fail_env && getenv(force_fail_env)) {
         *out_total = 1024 * 1024 * 1024ULL;
         *out_free = 1024ULL;
         *out_used = *out_total - *out_free;
@@ -1791,4 +1814,16 @@ int system_get_nvme_storage_info(uint64_t *out_free, uint64_t *out_total, uint64
     }
 
     return -1;
+}
+
+int system_get_nvme_storage_info(uint64_t *out_free, uint64_t *out_total, uint64_t *out_used) {
+    return system_get_external_storage_info("PKG_EXT1_DIR", "/mnt/ext1",
+                                            "PKG_FORCE_NVME_SPACE_FAIL",
+                                            out_free, out_total, out_used);
+}
+
+int system_get_usb_storage_info(uint64_t *out_free, uint64_t *out_total, uint64_t *out_used) {
+    return system_get_external_storage_info("PKG_EXT0_DIR", "/mnt/ext0",
+                                            "PKG_FORCE_USB_SPACE_FAIL",
+                                            out_free, out_total, out_used);
 }

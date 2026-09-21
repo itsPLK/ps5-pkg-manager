@@ -1107,9 +1107,11 @@ int smb_client_calc_checksum(const char *smb_url, char *out_checksum, size_t out
 
     uint8_t hdr[4096];
     ssize_t rd = smb_client_pread(smb_url, hdr, sizeof(hdr), 0);
-    uint32_t crc = 0;
+    uint32_t crc = (uint32_t)mz_crc32(MZ_CRC32_INIT,
+                                      (const unsigned char *)PKG_CACHE_FORMAT_TAG,
+                                      sizeof(PKG_CACHE_FORMAT_TAG) - 1);
     if (rd > 0) {
-        crc = (uint32_t)mz_crc32(MZ_CRC32_INIT, hdr, (size_t)rd);
+        crc = (uint32_t)mz_crc32(crc, hdr, (size_t)rd);
     }
 
     snprintf(out_checksum, out_max, "%08x%016llx%08x",
@@ -1251,6 +1253,7 @@ int smb_client_parse_pkg(const char *smb_url, pkg_detail_t *out) {
 
     int has_playgo_chunk_patch = 0;
     int has_delta_patch = 0;
+    int has_base_app_metadata = 0;
 
     for (uint32_t i = 0; i < entry_count; i++) {
         const uint8_t *e = entry_table + i * 32;
@@ -1278,6 +1281,11 @@ int smb_client_parse_pkg(const char *smb_url, pkg_detail_t *out) {
             if (json_buf) {
                 if (smb_file_session_read(sess, json_buf, data_sz, cnt_offset + data_off) == (ssize_t)data_sz) {
                     json_buf[data_sz] = '\0';
+                    if (strstr(json_buf, "\"applicationDrmType\"") ||
+                        strstr(json_buf, "\"applicationCategoryType\"") ||
+                        strstr(json_buf, "\"contentBadgeType\"")) {
+                        has_base_app_metadata = 1;
+                    }
                     pkg_parser_parse_param_json(json_buf, data_sz,
                                                 out->title_id, sizeof(out->title_id),
                                                 out->title_name, sizeof(out->title_name),
@@ -1330,6 +1338,8 @@ int smb_client_parse_pkg(const char *smb_url, pkg_detail_t *out) {
     if (has_playgo_chunk_patch || has_delta_patch || is_delta_type ||
         (out->category[0] != '\0' && strncmp(out->category, "gp", 2) == 0)) {
         out->pkg_type = PKG_TYPE_UPDATE;
+    } else if ((cnt_type_magic & 0xFF) == 1 && !has_base_app_metadata) {
+        out->pkg_type = PKG_TYPE_DLC;
     } else if (out->category[0] != '\0') {
         if (strncmp(out->category, "ac", 2) == 0 || strncmp(out->category, "al", 2) == 0 ||
             strcmp(out->category, "addcont") == 0) {
@@ -1338,8 +1348,6 @@ int smb_client_parse_pkg(const char *smb_url, pkg_detail_t *out) {
                    strncmp(out->category, "gc", 2) == 0 || strncmp(out->category, "wt", 2) == 0) {
             out->pkg_type = PKG_TYPE_BASE;
         }
-    } else if (cnt_type_magic == 1) {
-        out->pkg_type = PKG_TYPE_DLC;
     }
 
     if (out->pkg_type == PKG_TYPE_UNKNOWN) {
