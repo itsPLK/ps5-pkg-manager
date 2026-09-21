@@ -642,6 +642,35 @@ int main(void) {
       assert(q_count == 3);
       assert(changed == 1);
 
+      /* Step B2: An actively copied package may parse as Unknown Package, and
+       * the source listing can be incomplete while the copy is in progress.
+       * Preserve the previous catalog until a later scan confirms removals. */
+      unlink("/tmp/mock_manifest_test/pkg2.pkg");
+      FILE *copying_pkg = fopen("/tmp/mock_manifest_test/copying.pkg", "wb");
+      assert(copying_pkg != NULL);
+      fputs("partial package data", copying_pkg);
+      fclose(copying_pkg);
+
+      changed = -1;
+      q_count = pkg_scanner_scan_quick(NULL, &changed);
+      printf("Quick scan (active copy): count=%d, changed=%d (expected: 4, 1)\n", q_count, changed);
+      assert(q_count == 4);
+      assert(changed == 1);
+      char *copying_json = pkg_scanner_to_json();
+      assert(strstr(copying_json, "pkg2.pkg") != NULL); /* preserved */
+      assert(strstr(copying_json, "copying.pkg") != NULL);
+      assert(strstr(copying_json, "Unknown Package") != NULL);
+      free(copying_json);
+
+      /* Once the copy disappears and the valid package is restored, the
+       * following non-provisional scan is allowed to purge the old entry. */
+      unlink("/tmp/mock_manifest_test/copying.pkg");
+      system("cp /tmp/test_scan_fixtures/bq_upd.pkg /tmp/mock_manifest_test/pkg2.pkg");
+      changed = -1;
+      q_count = pkg_scanner_scan_quick(NULL, &changed);
+      assert(q_count == 3);
+      assert(changed == 1);
+
       /* Step C: Quick scan again -> must return changed == 0 */
       changed = -1;
       q_count = pkg_scanner_scan_quick(NULL, &changed);

@@ -111,6 +111,8 @@ static size_t g_package_count = 0;
 
 static pkg_drive_t g_drives[MAX_DRIVES];
 static size_t g_drive_count = 0;
+static int g_manifest_loaded = 0;
+static int g_scanner_initialized = 0;
 
 static pthread_mutex_t g_scanner_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_scan_active_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -345,6 +347,7 @@ static int save_manifest_locked(void) {
         unlink(tmp_path);
         return -1;
     }
+    g_manifest_loaded = 1;
     return 0;
 }
 
@@ -562,6 +565,8 @@ static int load_manifest_locked(void) {
 }
 
 int pkg_scanner_has_manifest(void) {
+    if (g_scanner_initialized) return g_manifest_loaded;
+
     const char *cache_dir = pkg_cache_get_dir();
     if (!cache_dir || cache_dir[0] == '\0') return 0;
     char manifest_path[1024];
@@ -625,6 +630,8 @@ void pkg_scanner_init(void) {
     pkg_cache_init();
 
     pthread_mutex_lock(&g_scanner_mutex);
+    g_manifest_loaded = 0;
+    g_scanner_initialized = 0;
     g_package_count = 0;
     g_drive_count = 0;
     free(g_scanned_files);
@@ -632,8 +639,9 @@ void pkg_scanner_init(void) {
     g_scanned_file_count = 0;
     g_scanned_file_capacity = 0;
     if (pkg_scanner_has_manifest()) {
-        load_manifest_locked();
+        g_manifest_loaded = (load_manifest_locked() == 0);
     }
+    g_scanner_initialized = 1;
     pthread_mutex_unlock(&g_scanner_mutex);
 
     /* Ensure default directory exists */
@@ -1235,6 +1243,27 @@ static void collect_local_files_quick(const char *dir_path, int recursive, int d
     closedir(d);
 }
 
+static int quick_file_list_has_path(const quick_file_list_t *list, const char *path) {
+    if (!list || !path) return 0;
+    for (size_t i = 0; i < list->count; i++) {
+        if (strcmp(list->entries[i].path, path) == 0) return 1;
+    }
+    return 0;
+}
+
+static int quick_pkg_list_has_path(const pkg_detail_t *list, size_t count, const char *path) {
+    if (!list || !path) return 0;
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(list[i].path, path) == 0) return 1;
+    }
+    return 0;
+}
+
+static int is_provisional_package(const pkg_detail_t *pkg) {
+    return pkg && strcmp(pkg->title_id, "UNKNOWN") == 0 &&
+           strcmp(pkg->title_name, "Unknown Package") == 0;
+}
+
 static int scan_quick_single_source(const char *drive_id, const char *drive_label,
                                     const char *drive_path, const char *drive_type,
                                     int is_smb, const smb_share_config_t *smb_cfg) {
@@ -1383,6 +1412,7 @@ static int scan_quick_single_source(const char *drive_id, const char *drive_labe
         }
     }
     size_t updated_count = 0;
+    int provisional_scan = 0;
 
     int *needs_parsing = NULL;
     if (cur_files.count > 0) {
@@ -1431,6 +1461,9 @@ static int scan_quick_single_source(const char *drive_id, const char *drive_labe
             int rc = parse_pkg_entry(file->path, file->filename, file->file_size, file->mtime, &new_detail);
             if (rc == 0) {
                 memcpy(&updated_pkgs[updated_count++], &new_detail, sizeof(pkg_detail_t));
+                if (is_provisional_package(&new_detail)) {
+                    provisional_scan = 1;
+                }
             }
         }
     }
@@ -1441,7 +1474,16 @@ static int scan_quick_single_source(const char *drive_id, const char *drive_labe
 
     size_t write_idx = 0;
     for (size_t i = 0; i < g_package_count; i++) {
-        if (!pkg_matches_drive_path(g_packages[i].path, drive_path)) {
+        int keep = !pkg_matches_drive_path(g_packages[i].path, drive_path);
+        if (!keep && provisional_scan &&
+            !quick_file_list_has_path(&cur_files, g_packages[i].path) &&
+            !quick_pkg_list_has_path(updated_pkgs, updated_count, g_packages[i].path)) {
+            /* A partially copied package can make a network or removable
+             * drive listing incomplete. Keep old entries until a later scan
+             * confirms that they are really gone. */
+            keep = 1;
+        }
+        if (keep) {
             if (write_idx != i) {
                 memcpy(&g_packages[write_idx], &g_packages[i], sizeof(pkg_detail_t));
             }
@@ -1457,8 +1499,11 @@ static int scan_quick_single_source(const char *drive_id, const char *drive_labe
         free(updated_pkgs);
     }
 
-    /* Update recorded scanned files for this drive */
-    remove_scanned_files_for_drive_locked(drive_path);
+    /* Update recorded scanned files for this drive. During a provisional scan,
+     * retain old records as well so the next quick scan retries the source. */
+    if (!provisional_scan) {
+        remove_scanned_files_for_drive_locked(drive_path);
+    }
     for (size_t f = 0; f < cur_files.count; f++) {
         add_scanned_file_locked(cur_files.entries[f].path,
                                 cur_files.entries[f].file_size,
@@ -1469,8 +1514,12 @@ static int scan_quick_single_source(const char *drive_id, const char *drive_labe
     for (size_t d = 0; d < g_drive_count; d++) {
         if (strcmp(g_drives[d].path, drive_path) == 0 || strcmp(g_drives[d].id, drive_id) == 0) {
             g_drives[d].mounted = 1;
-            g_drives[d].pkg_count = updated_count;
-            g_drives[d].clickable = (updated_count > 0);
+            size_t source_pkg_count = 0;
+            for (size_t p = 0; p < g_package_count; p++) {
+                if (pkg_matches_drive_path(g_packages[p].path, drive_path)) source_pkg_count++;
+            }
+            g_drives[d].pkg_count = source_pkg_count;
+            g_drives[d].clickable = (source_pkg_count > 0);
             found_drive = 1;
             break;
         }
