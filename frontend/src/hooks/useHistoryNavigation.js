@@ -143,6 +143,8 @@ export function useHistoryNavigation(props) {
   } = props;
 
   const currentRouteRef = useRef({ type: 'drives' });
+  const initialRouteRef = useRef(initialRoute || { type: 'drives' });
+  const initialRouteAppliedRef = useRef(false);
 
   const drivesRef = useRef(drives);
   useEffect(() => {
@@ -232,6 +234,72 @@ export function useHistoryNavigation(props) {
     currentRouteRef.current = startRoute;
     seedHistory(startRoute);
   }, []);
+
+  // Restore a deep link on the first load. The history seed above only
+  // creates browser entries; it does not select the corresponding view.
+  // Package data can arrive after this hook mounts, so apply the route once
+  // from the current drive list and let the normal render update handle the
+  // package detail itself.
+  useEffect(() => {
+    if (initialRouteAppliedRef.current) return;
+    const hashRoute = getRouteFromHash(window.location.hash);
+    const route = hashRoute.type !== 'drives' ? hashRoute : initialRouteRef.current;
+    const driveRoute = route.type === 'title'
+      ? { type: 'drive', driveId: route.driveId || '__all__' }
+      : route;
+
+    if (driveRoute.type === 'drive') {
+      const driveId = driveRoute.driveId || '__all__';
+      const drive = driveId === '__all__'
+        ? ALL_SOURCES_DRIVE
+        : (drivesRef.current.find((d) => (d.id || d.path) === driveId) || {
+            id: driveId, path: driveId, label: driveId, clickable: true
+          });
+      setShowSettings(false);
+      setShowSmbPage(false);
+      setShowDirectInstall(false);
+      setSelectedDrive(drive);
+      selectedDriveRef.current = drive;
+      if (fetchPackagesForDrive) fetchPackagesForDrive(drive);
+      if (route.type === 'title') {
+        setSelectedTitleId(route.titleId);
+        selectedTitleIdRef.current = route.titleId;
+      }
+    } else if (route.type === 'settings') {
+      setShowSettings(true);
+      setShowSmbPage(false);
+      setShowDirectInstall(false);
+    } else if (route.type === 'smb') {
+      setShowSettings(false);
+      setShowSmbPage(true);
+      setShowDirectInstall(false);
+    } else if (route.type === 'direct-install') {
+      setShowSettings(false);
+      setShowSmbPage(false);
+      setShowDirectInstall(true);
+    } else {
+      setShowSettings(false);
+      setShowSmbPage(false);
+      setShowDirectInstall(false);
+      setSelectedDrive(null);
+      selectedDriveRef.current = null;
+      setSelectedTitleId(null);
+      selectedTitleIdRef.current = null;
+      if (setPackages) setPackages([]);
+      if (setSearchQuery) setSearchQuery('');
+    }
+    initialRouteAppliedRef.current = true;
+  }, [
+    drives,
+    fetchPackagesForDrive,
+    setPackages,
+    setSearchQuery,
+    setSelectedDrive,
+    setSelectedTitleId,
+    setShowDirectInstall,
+    setShowSettings,
+    setShowSmbPage,
+  ]);
 
   // Listen to popstate (triggered by controller Circle button or browser back/forward)
   useEffect(() => {
