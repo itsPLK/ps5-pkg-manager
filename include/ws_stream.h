@@ -107,6 +107,8 @@ int ws_live_get_status(char *out_json, size_t max);
 /* Snapshots for progress replies. */
 uint64_t ws_live_get_total(void);
 void ws_live_get_counters(uint64_t *out_present, uint64_t *out_total);
+/* Number of bytes in the contiguous prefix acknowledged at least once. */
+uint64_t ws_live_get_resume_offset(void);
 
 /* Reader refcount for the streaming engine (virtual_stream open/close). */
 int ws_live_attach(void);

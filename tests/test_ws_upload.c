@@ -177,6 +177,65 @@ static void test_resume_and_cancel(void) {
     ws_direct_reset_for_tests();
 }
 
+static void test_owned_session_isolation(void) {
+    reset();
+    const char *owner_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const char *owner_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    char sid[64] = {0}, resumed[64] = {0};
+    assert(ws_direct_init_owned("same.pkg", 2ULL * WS_LIVE_SEG_SIZE,
+                                owner_a, NULL, sid, sizeof(sid)) == 0);
+    assert(ws_direct_init_owned("same.pkg", 2ULL * WS_LIVE_SEG_SIZE,
+                                owner_b, sid, resumed, sizeof(resumed)) == -2);
+    assert(ws_direct_init_owned("same.pkg", 2ULL * WS_LIVE_SEG_SIZE,
+                                owner_a, NULL, resumed, sizeof(resumed)) == -2);
+    assert(ws_direct_init_owned("same.pkg", 2ULL * WS_LIVE_SEG_SIZE,
+                                owner_a, sid, resumed, sizeof(resumed)) == 0);
+    assert(strcmp(sid, resumed) == 0);
+    assert(ws_direct_cancel_owned(owner_b, sid) == -1);
+    assert(ws_direct_session_active());
+    assert(ws_direct_cancel_owned(owner_a, sid) == 0);
+    assert(!ws_direct_session_active());
+    printf("  owned-session-isolation ok\n");
+    reset();
+}
+
+static void test_owned_socket_gate(void) {
+    reset();
+    const int port = 18851;
+    const char *owner = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    setenv("WS_DIRECT_PORT", "18851", 1);
+    assert(ws_direct_listener_start(port) == 0);
+    char sid[64] = {0};
+    assert(ws_direct_init_owned("same.pkg", 3000, owner, NULL, sid, sizeof(sid)) == 0);
+    int fd = ws_client_connect("127.0.0.1", port, "/ws/upload");
+    assert(fd >= 0);
+    char msg[512], rep[1024] = {0};
+    snprintf(msg, sizeof(msg),
+             "{\"op\":\"init\",\"filename\":\"same.pkg\",\"total\":3000,"
+             "\"owner\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"session_id\":\"%s\"}", sid);
+    assert(ws_client_send_text(fd, msg) == 0);
+    assert(ws_client_recv_text(fd, rep, sizeof(rep)) == 0);
+    assert(strstr(rep, "\"error\"") != NULL);
+    snprintf(msg, sizeof(msg),
+             "{\"op\":\"init\",\"filename\":\"same.pkg\",\"total\":3000,"
+             "\"owner\":\"%s\",\"session_id\":\"%s\"}", owner, sid);
+    assert(ws_client_send_text(fd, msg) == 0);
+    assert(ws_client_recv_text(fd, rep, sizeof(rep)) == 0);
+    assert(strstr(rep, "\"ready\"") != NULL);
+    int second = ws_client_connect("127.0.0.1", port, "/ws/upload");
+    assert(second >= 0);
+    assert(ws_client_send_text(second, msg) == 0);
+    assert(ws_client_recv_text(second, rep, sizeof(rep)) == 0);
+    assert(strstr(rep, "Uploader already connected") != NULL);
+    ws_client_close(second);
+    ws_client_close(fd);
+    assert(ws_direct_cancel_owned(owner, sid) == 0);
+    ws_direct_listener_stop();
+    unsetenv("WS_DIRECT_PORT");
+    printf("  owned-socket-gate ok\n");
+    reset();
+}
+
 static void test_live_socket_roundtrip(void) {
     reset();
     const int port = 18846;
@@ -337,6 +396,8 @@ int main(void) {
     test_live_basic();
     test_exact_boundary_and_tail();
     test_resume_and_cancel();
+    test_owned_session_isolation();
+    test_owned_socket_gate();
     test_live_socket_roundtrip();
     test_fragmented_messages();
     test_socket_busy_retry();

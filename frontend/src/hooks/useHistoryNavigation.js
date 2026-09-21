@@ -115,6 +115,7 @@ export function useHistoryNavigation(props) {
     setShowSmbPage,
     showDirectInstall,
     setShowDirectInstall,
+    directTransferActive,
     drives,
     fetchPackagesForDrive,
     fetchDrives,
@@ -161,6 +162,8 @@ export function useHistoryNavigation(props) {
   }, [showSmbPage]);
 
   const showDirectInstallRef = useRef(showDirectInstall);
+  const directTransferActiveRef = useRef(directTransferActive);
+  directTransferActiveRef.current = directTransferActive;
   showDirectInstallRef.current = showDirectInstall;
   useEffect(() => {
     showDirectInstallRef.current = showDirectInstall;
@@ -233,8 +236,14 @@ export function useHistoryNavigation(props) {
   // Listen to popstate (triggered by controller Circle button or browser back/forward)
   useEffect(() => {
     const handlePopState = () => {
+      if (showDirectInstallRef.current && directTransferActiveRef.current) {
+        if (!window.confirm('A direct installation is in progress. Leave this page?')) {
+          writeHistory({ type: 'direct-install' }, false);
+          return;
+        }
+      }
       // 1. If install/stream task is in progress, close the PS5 browser on Circle press
-      if (isInstallingRef.current) {
+      if (isInstallingRef.current && !directTransferActiveRef.current) {
         try {
           window.close();
         } catch (e) {}

@@ -2,7 +2,7 @@ import React from 'react';
 import BlurIcon, { iconUrlFor } from '../../BlurIcon';
 import { formatBytes } from '../../utils/formatters';
 
-export default function InstallingScreen({ installerStatus, batchInstall, etaInfo, storage, isDiscSource, onCancel, packages = [] }) {
+export default function InstallingScreen({ installerStatus, batchInstall, etaInfo, storage, isDiscSource, onCancel, packages = [], directIconUrl }) {
 const isBatch = !!(batchInstall && batchInstall.combinedTotal > 0);
     let totalBytes = installerStatus.total_bytes;
     let downloadedBytes = installerStatus.downloaded_bytes;
@@ -58,7 +58,9 @@ const isBatch = !!(batchInstall && batchInstall.combinedTotal > 0);
                 <line x1="12" y1="17" x2="12" y2="21" />
               </svg>
             </div>
-            {displayIconUrl ? (
+            {displayIconPath?.startsWith('live:') && directIconUrl ? (
+              <img src={directIconUrl} alt={titleToDisplay} className="absolute inset-0 w-full h-full object-cover z-10" />
+            ) : displayIconUrl ? (
               <BlurIcon
                 path={displayIconPath}
                 pkg={displayIconPkg}

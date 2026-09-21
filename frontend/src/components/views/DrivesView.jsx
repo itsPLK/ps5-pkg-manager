@@ -9,7 +9,7 @@ const ALL_SOURCES_DRIVE = {
   clickable: true
 };
 
-export default function DrivesView({ drives, storage, onSelectDrive, loadingDrives, refreshAll, onRescan }) {
+export default function DrivesView({ drives, storage, onSelectDrive, onDirectInstall, showDirectInstall, loadingDrives, refreshAll, onRescan }) {
   const handleSelectDrive = (drive) => {
     if (onSelectDrive) onSelectDrive(drive);
   };
@@ -29,7 +29,7 @@ export default function DrivesView({ drives, storage, onSelectDrive, loadingDriv
                 <div className="ps5-robust-spinner mx-auto" />
                 <p className="text-sm text-zinc-400 mt-3">Scanning mounted drives...</p>
               </div>
-            ) : drives.length === 0 ? (
+            ) : drives.length === 0 && !showDirectInstall ? (
               <div className="py-20 text-center rounded-[2px] border border-white/10 bg-[#12131a]/40 p-8">
                 <div className="w-20 h-20 rounded-[2px] bg-white/5 border border-white/10 mx-auto flex items-center justify-center text-zinc-500 mb-4">
                   <svg className="w-10 h-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -52,8 +52,22 @@ export default function DrivesView({ drives, storage, onSelectDrive, loadingDriv
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {showDirectInstall && (
+                  <button type="button" onClick={onDirectInstall}
+                    className="group relative rounded-[2px] ps5-focus-item p-5 transition-all flex items-center space-x-4 border text-left bg-[#141520] border-white/10 hover:border-white/20 hover:bg-[#171824] cursor-pointer">
+                    <div className="w-14 h-14 rounded-[2px] flex items-center justify-center border shrink-0 bg-green-950/40 border-green-500/40 text-green-300">
+                      <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+                        <path d="M12 3v12M7 10l5 5 5-5M4 21h16" />
+                      </svg>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-base font-bold text-white">Direct Install</h3>
+                      <p className="text-xs font-mono text-zinc-400 mt-0.5 truncate">Stream a .pkg from this computer</p>
+                    </div>
+                  </button>
+                )}
                 {/* All Sources Card */}
-                <button
+                {drives.length > 0 && <button
                   type="button"
                   onClick={() => handleSelectDrive(ALL_SOURCES_DRIVE)}
                   className="group relative rounded-[2px] ps5-focus-item p-5 transition-all flex items-center space-x-4 border text-left bg-[#141520] border-white/10 hover:border-white/20 hover:bg-[#171824] cursor-pointer"
@@ -81,7 +95,7 @@ export default function DrivesView({ drives, storage, onSelectDrive, loadingDriv
                       All connected storage &amp; shares
                     </p>
                   </div>
-                </button>
+                </button>}
 
                 {drives.map((d) => {
                   const isUsb = d.type === 'usb';

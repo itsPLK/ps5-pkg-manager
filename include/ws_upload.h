@@ -17,7 +17,7 @@
  *    starts lazily via ws_direct_ensure_listener() (first REST/WS use) or
  *    explicitly in tests via ws_direct_listener_start().
  *  - Single active upload session, single browser: seeks are delivered to
- *    the latest connected uploader; a second session init gets -2 busy.
+ *    the authenticated uploader; a second owner or socket is rejected.
  *  - Explicit per-segment addressing: every binary message belongs to the
  *    segment named by the preceding {"op":"seg"} text frame, so the
  *    browser may send (and resend) in any order, including far seeks that
@@ -48,6 +48,19 @@ extern "C" {
  * Starts the listener lazily. */
 int ws_direct_init_session(const char *filename, uint64_t total_size,
                            char *out_session_id, size_t sid_max);
+/* Browser-owned session: owner is a random per-tab token, sid is required
+ * for resume. A second tab cannot claim a session by filename and size. */
+int ws_direct_init_owned(const char *filename, uint64_t total_size,
+                         const char *owner, const char *resume_sid,
+                         char *out_session_id, size_t sid_max);
+int ws_direct_owner_matches(const char *owner, const char *sid);
+int ws_direct_cancel_owned(const char *owner, const char *sid);
+void ws_direct_set_metadata(const char *owner, const char *sid,
+                            const char *title, const char *title_id,
+                            const char *version, const char *kind);
+int ws_direct_get_metadata(const char *sid, char *title, size_t title_max,
+                           char *title_id, size_t id_max, char *version,
+                           size_t version_max, char *kind, size_t kind_max);
 
 /* Append a chunk at the current offset. Must be in-order; may block on
  * reader backpressure. Returns 0 on ok, -3 on offset mismatch

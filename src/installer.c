@@ -15,6 +15,7 @@
 #include "stream_debug_log.h"
 #include "pkg_cache.h"
 #include "ws_stream.h" /* NEW: live RAM sessions (additive; worker below unchanged) */
+#include "ws_upload.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1490,6 +1491,21 @@ int installer_start_live(const char *live_uri) {
     }
     free(hcache);
 
+    /* The browser can read param.json/SFO at arbitrary package offsets
+     * before streaming. The one-segment live header cache often cannot. */
+    char browser_title[256] = {0}, browser_id[64] = {0};
+    char browser_version[32] = {0}, browser_kind[16] = {0};
+    if (ws_direct_get_metadata(sid, browser_title, sizeof(browser_title),
+                               browser_id, sizeof(browser_id), browser_version,
+                               sizeof(browser_version), browser_kind,
+                               sizeof(browser_kind)) == 0) {
+        if (browser_title[0]) snprintf(detail.title_name, sizeof(detail.title_name), "%s", browser_title);
+        if (browser_id[0]) snprintf(detail.title_id, sizeof(detail.title_id), "%s", browser_id);
+        if (browser_version[0]) snprintf(detail.app_version, sizeof(detail.app_version), "%s", browser_version);
+        if (!strcmp(browser_kind, "base") || !strcmp(browser_kind, "update") || !strcmp(browser_kind, "dlc"))
+            snprintf(detail.pkg_type_str, sizeof(detail.pkg_type_str), "%s", browser_kind);
+    }
+
     if (detail.is_multipart) {
         ps5_notify("Live install supports single packages only");
         return -13;
@@ -1776,4 +1792,3 @@ int system_get_nvme_storage_info(uint64_t *out_free, uint64_t *out_total, uint64
 
     return -1;
 }
-

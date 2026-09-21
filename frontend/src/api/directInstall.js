@@ -1,8 +1,8 @@
-export async function initUpload(filename, total) {
+export async function initUpload(filename, total, owner, sessionId, details) {
   const res = await fetch('/api/upload/init', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ filename, total })
+    body: JSON.stringify({ filename, total, owner, session_id: sessionId || '', ...details })
   });
   const data = await res.json();
   if (!res.ok || !data.success) {
@@ -26,8 +26,11 @@ export async function finishUpload() {
   return data;
 }
 
-export async function cancelUpload() {
-  const res = await fetch('/api/upload/cancel', { method: 'POST' });
+export async function cancelUpload(owner, sessionId) {
+  const res = await fetch('/api/upload/cancel', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ owner, session_id: sessionId })
+  });
   if (!res.ok) throw new Error('Cancel failed: ' + res.status);
   return res.json();
 }

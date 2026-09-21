@@ -58,6 +58,23 @@ static uint64_t now_ms(void) {
     return (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL;
 }
 
+static void json_filename(const char *src, char *out, size_t cap) {
+    size_t n = 0;
+    if (!cap) return;
+    for (const unsigned char *p = (const unsigned char *)src; *p && n + 7 < cap; p++) {
+        if (*p == '"' || *p == '\\') {
+            out[n++] = '\\';
+            out[n++] = (char)*p;
+        } else if (*p < 0x20) {
+            snprintf(out + n, cap - n, "\\u%04x", *p);
+            n += 6;
+        } else {
+            out[n++] = (char)*p;
+        }
+    }
+    out[n] = '\0';
+}
+
 static void live_lock_init(void) {
     if (!g_lv.inited) {
         pthread_mutex_init(&g_lv.mu, NULL);
@@ -734,23 +751,29 @@ int ws_live_get_status(char *out_json, size_t max) {
         return 0;
     }
     uint64_t bytes = 0;
+    uint64_t resident = 0;
     for (uint64_t s = 0; s < g_lv.nsegs; s++)
-        if (g_lv.present[s]) bytes += seg_len_locked(s);
+    {
+        if (g_lv.acked_ever[s]) bytes += seg_len_locked(s);
+        if (g_lv.present[s]) resident += seg_len_locked(s);
+    }
     int header_ready = g_lv.active && !g_lv.aborted && g_lv.nsegs > 0 && g_lv.present[0];
     uint64_t slots_used = 0;
+    char escaped_filename[512];
+    json_filename(g_lv.filename, escaped_filename, sizeof(escaped_filename));
     for (int i = 0; i < g_lv.nslots; i++)
         if (g_lv.slot_seg[i] >= 0) slots_used++;
     int n = snprintf(out_json, max,
         "{\"active\":%s,\"aborted\":%s,\"session_id\":\"%s\",\"filename\":\"%s\","
         "\"total\":%llu,\"received\":%llu,\"served\":%llu,\"complete\":%s,"
-        "\"header_ready\":%s,\"slots_used\":%llu,\"slots\":%d}",
+        "\"header_ready\":%s,\"resident\":%llu,\"slots_used\":%llu,\"slots\":%d}",
         g_lv.active ? "true" : "false",
         g_lv.aborted ? "true" : "false",
-        g_lv.session_id, g_lv.filename,
+        g_lv.session_id, escaped_filename,
         (unsigned long long)g_lv.total, (unsigned long long)bytes,
         (unsigned long long)g_lv.served,
         (g_lv.active && g_lv.upload_complete) ? "true" : "false",
-        header_ready ? "true" : "false",
+        header_ready ? "true" : "false", (unsigned long long)resident,
         (unsigned long long)slots_used, g_lv.nslots);
     pthread_mutex_unlock(&g_lv.mu);
     return (n > 0 && (size_t)n < max) ? 0 : -1;
@@ -775,4 +798,16 @@ void ws_live_get_counters(uint64_t *out_received, uint64_t *out_total) {
     if (out_received) *out_received = bytes;
     if (out_total) *out_total = g_lv.active ? g_lv.total : 0;
     pthread_mutex_unlock(&g_lv.mu);
+}
+
+uint64_t ws_live_get_resume_offset(void) {
+    live_lock_init();
+    pthread_mutex_lock(&g_lv.mu);
+    uint64_t s = 0;
+    if (g_lv.active && g_lv.acked_ever)
+        while (s < g_lv.nsegs && g_lv.acked_ever[s]) s++;
+    uint64_t bytes = s * SEG;
+    if (bytes > g_lv.total) bytes = g_lv.total;
+    pthread_mutex_unlock(&g_lv.mu);
+    return bytes;
 }

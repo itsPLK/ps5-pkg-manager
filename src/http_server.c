@@ -23,6 +23,7 @@
                         * hook below is the ONLY touch point: guarded REST
                         * routes, off unless a browser explicitly calls them.
                         * No existing route or init order is changed. */
+#include "ws_stream.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -198,9 +199,17 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         if (strcmp(method, "POST") == 0 && strcmp(url, "/api/upload/init") == 0) {
             post_state_t *ps = (post_state_t *)*con_cls;
             char fn[256] = {0};
+            char owner[65] = {0}, resume_sid[64] = {0};
+            char title[256] = {0}, title_id[64] = {0}, version[32] = {0}, kind[16] = {0};
             uint64_t total = 0;
             if (ps && ps->data) {
                 extract_json_string_value(ps->data, "filename", fn, sizeof(fn));
+                extract_json_string_value(ps->data, "owner", owner, sizeof(owner));
+                extract_json_string_value(ps->data, "session_id", resume_sid, sizeof(resume_sid));
+                extract_json_string_value(ps->data, "title_name", title, sizeof(title));
+                extract_json_string_value(ps->data, "title_id", title_id, sizeof(title_id));
+                extract_json_string_value(ps->data, "app_version", version, sizeof(version));
+                extract_json_string_value(ps->data, "pkg_type", kind, sizeof(kind));
                 const char *tp = strstr(ps->data, "\"total\"");
                 if (tp) {
                     tp = strchr(tp + 7, ':');
@@ -215,7 +224,8 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                 code = MHD_HTTP_BAD_REQUEST;
             } else {
                 char sid[64] = {0};
-                int rc = ws_direct_init_session(fn, total, sid, sizeof(sid));
+                int rc = ws_direct_init_owned(fn, total, owner, resume_sid,
+                                              sid, sizeof(sid));
                 if (rc == -2) {
                     snprintf(resp_json, sizeof(resp_json),
                              "{\"success\":false,\"error\":\"Another upload is active\"}");
@@ -225,6 +235,7 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                              "{\"success\":false,\"error\":\"Cannot start upload session\"}");
                     code = MHD_HTTP_BAD_REQUEST;
                 } else {
+                    ws_direct_set_metadata(owner, sid, title, title_id, version, kind);
                     /* The spool session exists but chunk bytes travel over
                      * the :8846 listener: refuse loudly if it is down instead
                      * of letting the browser time out against a dead port. */
@@ -234,12 +245,7 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                                  "{\"success\":false,\"error\":\"Upload socket unavailable\"}");
                         code = MHD_HTTP_INTERNAL_SERVER_ERROR;
                     } else {
-                        char st[768];
-                        uint64_t off = 0;
-                        if (ws_direct_get_status(st, sizeof(st)) == 0) {
-                            const char *rp = strstr(st, "\"received\":");
-                            if (rp) off = strtoull(rp + 11, NULL, 10);
-                        }
+                        uint64_t off = ws_live_get_resume_offset();
                         snprintf(resp_json, sizeof(resp_json),
                                  "{\"success\":true,\"session_id\":\"%s\",\"offset\":%llu,\"ws_port\":%d}",
                                  sid, (unsigned long long)off,
@@ -295,13 +301,20 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         }
         /* POST /api/upload/cancel */
         if (strcmp(method, "POST") == 0 && strcmp(url, "/api/upload/cancel") == 0) {
-            ws_direct_cancel_session();
-            static const char ok_resp[] = "{\"success\":true}";
+            post_state_t *ps = (post_state_t *)*con_cls;
+            char owner[65] = {0}, sid[64] = {0};
+            if (ps && ps->data) {
+                extract_json_string_value(ps->data, "owner", owner, sizeof(owner));
+                extract_json_string_value(ps->data, "session_id", sid, sizeof(sid));
+            }
+            int ok = ws_direct_cancel_owned(owner, sid) == 0;
+            const char *ok_resp = ok ? "{\"success\":true}" :
+                "{\"success\":false,\"error\":\"Session belongs to another window\"}";
             struct MHD_Response *resp = MHD_create_response_from_buffer(
-                sizeof(ok_resp) - 1, (void *)ok_resp, MHD_RESPMEM_PERSISTENT);
+                strlen(ok_resp), (void *)ok_resp, MHD_RESPMEM_PERSISTENT);
             add_cors_headers(resp);
             MHD_add_response_header(resp, "Content-Type", "application/json");
-            enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_OK, resp);
+            enum MHD_Result ret = MHD_queue_response(conn, ok ? MHD_HTTP_OK : MHD_HTTP_CONFLICT, resp);
             MHD_destroy_response(resp);
             return ret;
         }
@@ -1157,4 +1170,3 @@ int http_server_restart_with_delay(int port, unsigned int delay_us) {
 int http_server_restart(int port) {
     return http_server_restart_with_delay(port, 500000);
 }
-

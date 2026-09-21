@@ -25,6 +25,8 @@ import { useInstaller } from './hooks/useInstaller';
 import { useDonation } from './hooks/useDonation';
 import { useHistoryNavigation } from './hooks/useHistoryNavigation';
 import { useModalInert } from './hooks/useModalInert';
+import { useDirectUpload } from './hooks/useDirectUpload';
+import { uploadStatus } from './api/directInstall';
 
 import OfflineScreen from './components/screens/OfflineScreen';
 import LoadingScreen from './components/screens/LoadingScreen';
@@ -74,6 +76,37 @@ export default function App() {
   const [sortBy, setSortBy] = useState('date-desc');
   const [selectedTitleId, setSelectedTitleId] = useState(null);
   const [showDirectInstall, setShowDirectInstall] = useState(false);
+  const directTabId = useRef(Math.random().toString(36).slice(2) + Date.now());
+  const directUpload = useDirectUpload(directTabId.current);
+  const directTransferActive = directUpload.state === 'uploading' || directUpload.installing;
+  const directLeaseHeld = Boolean(directUpload.sessionId) &&
+    directUpload.state !== 'idle' && directUpload.state !== 'canceled';
+
+  useEffect(() => {
+    if (!directLeaseHeld) return;
+    const mark = () => localStorage.setItem('directInstallLease', JSON.stringify({
+      tab: directTabId.current, time: Date.now(), session: directUpload.sessionId
+    }));
+    mark();
+    const timer = setInterval(mark, 2000);
+    return () => {
+      clearInterval(timer);
+      try {
+        const lease = JSON.parse(localStorage.getItem('directInstallLease') || '{}');
+        if (lease.tab === directTabId.current) localStorage.removeItem('directInstallLease');
+      } catch (e) {}
+    };
+  }, [directLeaseHeld, directUpload.sessionId]);
+
+  useEffect(() => {
+    if (!directTransferActive) return;
+    const warn = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [directTransferActive]);
 
   const selectedDriveRef = useRef(selectedDrive);
   selectedDriveRef.current = selectedDrive;
@@ -495,6 +528,7 @@ export default function App() {
     setShowSettings,
     setShowSmbPage,
     setShowDirectInstall,
+    directTransferActive,
     drives,
     fetchPackagesForDrive,
     fetchDrives,
@@ -520,6 +554,49 @@ export default function App() {
     showToast,
     initialRoute: selectedDrive ? { type: 'drive', driveId: selectedDrive.id || '__all__' } : { type: 'drives' },
   });
+
+  const openDirectInstall = async () => {
+    if (isPlayStation) return;
+    try {
+      const status = await uploadStatus();
+      if (status.active) {
+        let lease = {};
+        try { lease = JSON.parse(localStorage.getItem('directInstallLease') || '{}'); } catch (e) {}
+        const anotherWindow = lease.tab && lease.tab !== directTabId.current && Date.now() - lease.time < 10000;
+        const anotherSession = status.session_id !== sessionStorage.getItem('directInstallSession');
+        if (anotherWindow || anotherSession) {
+          window.alert('Direct Install is already active in another window. Finish it there first.');
+          return;
+        }
+      }
+    } catch (e) {
+      showToast('Could not check Direct Install status', 'error');
+      return;
+    }
+    handleOpenDirectInstall();
+  };
+
+  useEffect(() => {
+    if (!showDirectInstall) return;
+    let stopped = false;
+    const check = async () => {
+      try {
+        const status = await uploadStatus();
+        if (stopped || !status.active) return;
+        const lease = JSON.parse(localStorage.getItem('directInstallLease') || '{}');
+        const anotherWindow = lease.tab && lease.tab !== directTabId.current && Date.now() - lease.time < 10000;
+        const anotherSession = status.session_id !== sessionStorage.getItem('directInstallSession');
+        if (anotherWindow || anotherSession) {
+          stopped = true;
+          window.alert('Direct Install is active in another window.');
+          handleCloseDirectInstall();
+        }
+      } catch (e) {}
+    };
+    check();
+    const timer = setInterval(check, 3000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [showDirectInstall, handleCloseDirectInstall]);
 
   const isAnyModalOpen = Boolean(
     showDonateModal ||
@@ -672,8 +749,12 @@ export default function App() {
       etaInfo={etaInfo}
       storage={storage}
       isDiscSource={isDiscSource}
-      onCancel={handleCancel}
+      onCancel={() => {
+        handleCancel();
+        if (installerStatus?.pkg_path?.startsWith('live:')) directUpload.cancel();
+      }}
       packages={packages}
+      directIconUrl={directUpload.iconUrl}
     />;
   }
 
@@ -704,17 +785,10 @@ export default function App() {
         storage={storage}
         showSettings={showSettings}
         showSmbPage={showSmbPage}
-        showDirectInstall={showDirectInstall}
-        onDirectInstallClick={() => {
-          if (showDirectInstall) {
-            handleCloseDirectInstall();
-            return;
-          }
-          handleOpenDirectInstall();
-        }}
         onSettingsClick={() => {
           if (showDirectInstall) {
-            handleCloseDirectInstall();
+            if (directTransferActive && !window.confirm('A direct installation is in progress. Leave this page?')) return;
+            setShowDirectInstall(false);
           }
           if (showSmbPage) {
             handleCloseSmb();
@@ -737,7 +811,7 @@ export default function App() {
         {showDirectInstall ? (
           <DirectInstallView
             onBack={handleCloseDirectInstall}
-            showToast={showToast}
+            up={directUpload}
           />
         ) : showSmbPage ? (
           <SmbManagementView
@@ -823,6 +897,8 @@ export default function App() {
             drives={drives}
             storage={storage}
             onSelectDrive={handleSelectDrive}
+            onDirectInstall={openDirectInstall}
+            showDirectInstall={!isPlayStation}
             loadingDrives={loadingDrives}
             refreshAll={refreshAll}
           />

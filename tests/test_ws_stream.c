@@ -81,10 +81,12 @@ static void test_finish_needs_all(void) {
     static unsigned char s0[WS_LIVE_SEG_SIZE];
     memset(s0, 0xAA, sizeof(s0));
     assert(ws_live_write(0, s0, SEG, NULL) == 0);
+    assert(ws_live_get_resume_offset() == SEG);
     assert(ws_live_finish() != 0); /* seg 1 missing */
     static unsigned char s1[WS_LIVE_SEG_SIZE];
     memset(s1, 0xBB, sizeof(s1));
     assert(ws_live_write(SEG, s1, SEG, NULL) == 0);
+    assert(ws_live_get_resume_offset() == 2 * SEG);
     assert(ws_live_finish() == 0);
     printf("  finish-needs-all ok\n");
 }

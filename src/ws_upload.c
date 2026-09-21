@@ -59,11 +59,16 @@ static int g_listen_port = 0;
 /* Uplink: the browser socket that owns the upload. Seek requests from
  * blocked readers are emitted here; all control sends on upload sockets
  * are serialized through g_uplink_mu so interleaved writers can't
- * corrupt the frame stream. Single-browser by design (the session
- * rejects a second init while active); if two browsers ever raced, the
- * latest connection wins the seeks. */
+ * corrupt the frame stream. Only the authenticated socket is installed
+ * here; a second connection cannot take over seeks. */
 static int g_uplink_fd = -1;
 static pthread_mutex_t g_uplink_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_owner_mu = PTHREAD_MUTEX_INITIALIZER;
+static char g_owner[65];
+static char g_owner_sid[64];
+static char g_owner_filename[256];
+static uint64_t g_owner_total;
+static char g_meta_title[256], g_meta_id[64], g_meta_version[32], g_meta_kind[16];
 
 static void live_init(void) {
     static int once = 0;
@@ -106,6 +111,91 @@ int ws_direct_init_session(const char *filename, uint64_t total_size,
     return 0;
 }
 
+int ws_direct_owner_matches(const char *owner, const char *sid) {
+    if (!owner || !sid || !owner[0] || !sid[0]) return 0;
+    pthread_mutex_lock(&g_owner_mu);
+    int ok = g_owner[0] && strcmp(owner, g_owner) == 0 &&
+             strcmp(sid, g_owner_sid) == 0 && ws_live_check_id(sid);
+    pthread_mutex_unlock(&g_owner_mu);
+    return ok;
+}
+
+int ws_direct_init_owned(const char *filename, uint64_t total_size,
+                         const char *owner, const char *resume_sid,
+                         char *out_session_id, size_t sid_max) {
+    if (!owner || strlen(owner) < 32 || strlen(owner) > 64 ||
+        !filename || !filename[0] || !total_size || total_size > WS_DIRECT_MAX_TOTAL ||
+        !out_session_id || sid_max < WS_DIRECT_SESSION_ID_MAX)
+        return -1;
+    pthread_mutex_lock(&g_owner_mu);
+    if (ws_live_session_active()) {
+        int same = g_owner[0] && resume_sid && resume_sid[0] &&
+                   strcmp(owner, g_owner) == 0 &&
+                   strcmp(resume_sid, g_owner_sid) == 0 &&
+                   strcmp(filename, g_owner_filename) == 0 &&
+                   total_size == g_owner_total && ws_live_check_id(resume_sid);
+        if (same && out_session_id && sid_max)
+            snprintf(out_session_id, sid_max, "%s", g_owner_sid);
+        pthread_mutex_unlock(&g_owner_mu);
+        return same ? 0 : -2;
+    }
+    int rc = ws_direct_init_session(filename, total_size, out_session_id, sid_max);
+    if (rc == 0) {
+        snprintf(g_owner, sizeof(g_owner), "%s", owner);
+        snprintf(g_owner_sid, sizeof(g_owner_sid), "%s", out_session_id);
+        snprintf(g_owner_filename, sizeof(g_owner_filename), "%s", filename);
+        g_owner_total = total_size;
+        g_meta_title[0] = g_meta_id[0] = g_meta_version[0] = g_meta_kind[0] = '\0';
+    }
+    pthread_mutex_unlock(&g_owner_mu);
+    return rc;
+}
+
+void ws_direct_set_metadata(const char *owner, const char *sid,
+                            const char *title, const char *title_id,
+                            const char *version, const char *kind) {
+    if (!owner || !sid) return;
+    pthread_mutex_lock(&g_owner_mu);
+    if (g_owner[0] && strcmp(owner, g_owner) == 0 &&
+        strcmp(sid, g_owner_sid) == 0 && ws_live_check_id(sid)) {
+        snprintf(g_meta_title, sizeof(g_meta_title), "%s", title ? title : "");
+        snprintf(g_meta_id, sizeof(g_meta_id), "%s", title_id ? title_id : "");
+        snprintf(g_meta_version, sizeof(g_meta_version), "%s", version ? version : "");
+        snprintf(g_meta_kind, sizeof(g_meta_kind), "%s", kind ? kind : "");
+    }
+    pthread_mutex_unlock(&g_owner_mu);
+}
+
+int ws_direct_get_metadata(const char *sid, char *title, size_t title_max,
+                           char *title_id, size_t id_max, char *version,
+                           size_t version_max, char *kind, size_t kind_max) {
+    if (!sid) return -1;
+    pthread_mutex_lock(&g_owner_mu);
+    int ok = g_owner[0] && strcmp(sid, g_owner_sid) == 0 && ws_live_check_id(sid);
+    if (ok) {
+        if (title && title_max) snprintf(title, title_max, "%s", g_meta_title);
+        if (title_id && id_max) snprintf(title_id, id_max, "%s", g_meta_id);
+        if (version && version_max) snprintf(version, version_max, "%s", g_meta_version);
+        if (kind && kind_max) snprintf(kind, kind_max, "%s", g_meta_kind);
+    }
+    pthread_mutex_unlock(&g_owner_mu);
+    return ok ? 0 : -1;
+}
+
+int ws_direct_cancel_owned(const char *owner, const char *sid) {
+    if (!owner || !sid) return -1;
+    pthread_mutex_lock(&g_owner_mu);
+    int ok = g_owner[0] && strcmp(owner, g_owner) == 0 &&
+             strcmp(sid, g_owner_sid) == 0 && ws_live_check_id(sid);
+    if (!ok) {
+        pthread_mutex_unlock(&g_owner_mu);
+        return -1;
+    }
+    ws_direct_cancel_session();
+    pthread_mutex_unlock(&g_owner_mu);
+    return 0;
+}
+
 int ws_direct_write_chunk(uint64_t offset, const void *data, size_t len,
                           uint64_t *out_expected) {
     /* May block on reader backpressure (conn thread: browser just waits). */
@@ -133,12 +223,21 @@ int ws_direct_finish_session(char *out_uri, size_t uri_max) {
 }
 
 void ws_direct_cancel_session(void) {
+    pthread_mutex_lock(&g_uplink_mu);
+    if (g_uplink_fd >= 0) {
+        shutdown(g_uplink_fd, SHUT_RDWR);
+        g_uplink_fd = -1;
+    }
+    pthread_mutex_unlock(&g_uplink_mu);
     ws_live_abort();
     ws_live_destroy();
 }
 
 void ws_direct_reset_for_tests(void) {
     ws_live_reset_for_tests();
+    pthread_mutex_lock(&g_owner_mu);
+    g_owner[0] = g_owner_sid[0] = '\0';
+    pthread_mutex_unlock(&g_owner_mu);
 }
 
 int ws_direct_get_status(char *out_json, size_t max) {
@@ -424,7 +523,8 @@ static void uplink_seek(uint64_t seg) {
     pthread_mutex_unlock(&g_uplink_mu);
 }
 
-static void handle_text_msg(int fd, const char *msg, long *pending_seg) {
+static void handle_text_msg(int fd, const char *msg, long *pending_seg,
+                            int *authorized, char *authorized_sid) {
     char op[32] = {0};
     if (wsj_string(msg, "op", op, sizeof(op)) != 0) {
         send_text_locked(fd, "{\"op\":\"error\",\"error\":\"missing op\"}");
@@ -432,6 +532,7 @@ static void handle_text_msg(int fd, const char *msg, long *pending_seg) {
     }
     if (strcmp(op, "init") == 0) {
         char fn[WS_DIRECT_FILENAME_MAX] = {0};
+        char owner[65] = {0}, requested_sid[64] = {0};
         uint64_t total = 0;
         if (wsj_string(msg, "filename", fn, sizeof(fn)) != 0 ||
             wsj_u64(msg, "total", &total) != 0 || total == 0) {
@@ -439,7 +540,29 @@ static void handle_text_msg(int fd, const char *msg, long *pending_seg) {
             return;
         }
         char sid[WS_DIRECT_SESSION_ID_MAX] = {0};
-        int rc = ws_direct_init_session(fn, total, sid, sizeof(sid));
+        int rc;
+        pthread_mutex_lock(&g_owner_mu);
+        int owned = g_owner[0] != '\0';
+        pthread_mutex_unlock(&g_owner_mu);
+        if (owned) {
+            if (wsj_string(msg, "owner", owner, sizeof(owner)) != 0 ||
+                wsj_string(msg, "session_id", requested_sid, sizeof(requested_sid)) != 0 ||
+                !ws_direct_owner_matches(owner, requested_sid)) {
+                send_text_locked(fd, "{\"op\":\"error\",\"error\":\"Another upload is active\"}");
+                return;
+            }
+            pthread_mutex_lock(&g_owner_mu);
+            int same_file = strcmp(fn, g_owner_filename) == 0 && total == g_owner_total;
+            pthread_mutex_unlock(&g_owner_mu);
+            if (!same_file) {
+                send_text_locked(fd, "{\"op\":\"error\",\"error\":\"File does not match session\"}");
+                return;
+            }
+            snprintf(sid, sizeof(sid), "%s", requested_sid);
+            rc = 0;
+        } else {
+            rc = ws_direct_init_session(fn, total, sid, sizeof(sid));
+        }
         if (rc == -2) {
             send_text_locked(fd, "{\"op\":\"error\",\"error\":\"busy\"}");
             return;
@@ -448,8 +571,17 @@ static void handle_text_msg(int fd, const char *msg, long *pending_seg) {
             send_text_locked(fd, "{\"op\":\"error\",\"error\":\"init failed\"}");
             return;
         }
-        uint64_t r = 0;
-        ws_live_get_counters(&r, NULL);
+        pthread_mutex_lock(&g_uplink_mu);
+        if (g_uplink_fd >= 0 && g_uplink_fd != fd) {
+            pthread_mutex_unlock(&g_uplink_mu);
+            send_text_locked(fd, "{\"op\":\"error\",\"error\":\"Uploader already connected\"}");
+            return;
+        }
+        g_uplink_fd = fd;
+        pthread_mutex_unlock(&g_uplink_mu);
+        *authorized = 1;
+        snprintf(authorized_sid, WS_DIRECT_SESSION_ID_MAX, "%s", sid);
+        uint64_t r = ws_live_get_resume_offset();
         char rep[320];
         snprintf(rep, sizeof(rep),
                  "{\"op\":\"ready\",\"session_id\":\"%s\",\"offset\":%llu}",
@@ -460,6 +592,7 @@ static void handle_text_msg(int fd, const char *msg, long *pending_seg) {
         ws_direct_get_status(st, sizeof(st));
         send_text_locked(fd, st);
     } else if (strcmp(op, "finish") == 0) {
+        if (!*authorized || !ws_live_check_id(authorized_sid)) { send_text_locked(fd, "{\"op\":\"error\",\"error\":\"Unauthorized\"}"); return; }
         char path[640] = {0};
         if (ws_direct_finish_session(path, sizeof(path)) != 0) {
             char rep[256];
@@ -476,9 +609,11 @@ static void handle_text_msg(int fd, const char *msg, long *pending_seg) {
                  "{\"op\":\"complete\",\"path\":\"%s\"}", path);
         send_text_locked(fd, rep);
     } else if (strcmp(op, "cancel") == 0) {
+        if (!*authorized || !ws_live_check_id(authorized_sid)) { send_text_locked(fd, "{\"op\":\"error\",\"error\":\"Unauthorized\"}"); return; }
         ws_direct_cancel_session();
         send_text_locked(fd, "{\"op\":\"cancelled\"}");
     } else if (strcmp(op, "seg") == 0) {
+        if (!*authorized || !ws_live_check_id(authorized_sid)) { send_text_locked(fd, "{\"op\":\"error\",\"error\":\"Unauthorized\"}"); return; }
         /* Address the following binary message at segment S. Out-of-range
          * segments fail at apply time; just record it. */
         uint64_t seg = 0;
@@ -590,15 +725,14 @@ static void *ws_conn_worker(void *arg) {
         close(fd);
         return NULL;
     }
-    pthread_mutex_lock(&g_uplink_mu);
-    g_uplink_fd = fd;
-    pthread_mutex_unlock(&g_uplink_mu);
     install_log("[WS] connection upgraded: path='%.100s' pipelined=%zu", path, keep);
 
     /* Frame loop with reassembly buffers (heap: 8 MiB never on thread stack). */
     unsigned char *bin_msg = NULL;
     size_t bin_cap = 0;
     long pending_seg = -1;
+    int authorized = 0;
+    char authorized_sid[WS_DIRECT_SESSION_ID_MAX] = {0};
     unsigned char *rbuf = (unsigned char *)malloc(WS_BIN_MSG_MAX + 1024);
     if (!rbuf) { live_remove(fd); close(fd); return NULL; }
     size_t rcap = WS_BIN_MSG_MAX + 1024;
@@ -676,7 +810,7 @@ static void *ws_conn_worker(void *arg) {
             if (fin) {
                 frag_text[frag_tlen] = '\0';
                 n_text++;
-                handle_text_msg(fd, frag_text, &pending_seg);
+                handle_text_msg(fd, frag_text, &pending_seg, &authorized, authorized_sid);
                 frag_text_on = 0;
                 frag_tlen = 0;
             }
@@ -723,7 +857,8 @@ static void *ws_conn_worker(void *arg) {
                 uint64_t segs = total ? (total + WS_LIVE_SEG_SIZE - 1) / WS_LIVE_SEG_SIZE : 0;
                 uint64_t exp_len = WS_LIVE_SEG_SIZE;
                 if (seg < segs && seg == segs - 1) exp_len = total - seg * WS_LIVE_SEG_SIZE;
-                if (!ws_direct_session_active() || seg >= segs ||
+                if (!authorized || !ws_live_check_id(authorized_sid) ||
+                    !ws_direct_session_active() || seg >= segs ||
                     frag_bin_total != (size_t)exp_len) {
                     install_log("[WS] binary message rejected (seg=%llu len=%zu session=%d)",
                                 (unsigned long long)seg, frag_bin_total,

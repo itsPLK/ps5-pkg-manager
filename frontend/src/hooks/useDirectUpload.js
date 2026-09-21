@@ -1,6 +1,18 @@
 import { useState, useRef, useCallback } from 'react';
 import { initUpload, uploadStatus, cancelUpload, wsUploadUrl } from '../api/directInstall';
-import { pollStatus } from '../api/installer';
+import { pollStatus, installPackage } from '../api/installer';
+import { parseLocalPkg } from '../utils/parseLocalPkg';
+
+function getOwner() {
+  let owner = sessionStorage.getItem('directInstallOwner');
+  if (!owner) {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    owner = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    sessionStorage.setItem('directInstallOwner', owner);
+  }
+  return owner;
+}
 
 function waitForMessage(ws, timeoutMs) {
   return new Promise(function (resolve, reject) {
@@ -33,7 +45,7 @@ function waitForMessage(ws, timeoutMs) {
   });
 }
 
-export function useDirectUpload() {
+export function useDirectUpload(tabId) {
   const [state, setState] = useState('idle');
   const [progress, setProgress] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -43,6 +55,14 @@ export function useDirectUpload() {
   const [headerReady, setHeaderReady] = useState(false);
   const [installPath, setInstallPath] = useState('');
   const [error, setError] = useState('');
+  const [details, setDetails] = useState(null);
+  const [iconUrl, setIconUrl] = useState('');
+  const [installing, setInstalling] = useState(false);
+  const selectedFileRef = useRef(null);
+  const iconUrlRef = useRef('');
+  const sessionIdRef = useRef(sessionStorage.getItem('directInstallSession') || '');
+  const installCalledRef = useRef(false);
+  const installStartedRef = useRef(false);
   const cancelRef = useRef(false);
   const wsRef = useRef(null);
   const statusTimerRef = useRef(null);
@@ -70,7 +90,50 @@ export function useDirectUpload() {
     setHeaderReady(false);
     setInstallPath('');
     setError('');
+    setDetails(null);
+    setInstalling(false);
+    installStartedRef.current = false;
+    selectedFileRef.current = null;
+    sessionIdRef.current = '';
+    sessionStorage.removeItem('directInstallSession');
+    if (iconUrlRef.current) URL.revokeObjectURL(iconUrlRef.current);
+    iconUrlRef.current = '';
+    setIconUrl('');
   }, [stopStatusPoll]);
+
+  const selectFile = useCallback(async function (file) {
+    if (sessionId && state !== 'idle') {
+      setError('Start over before choosing another package');
+      return;
+    }
+    if (!file || !/\.pkg$/i.test(file.name) || file.size === 0) {
+      setError('Choose a nonempty .pkg file');
+      return;
+    }
+    const resumeId = sessionIdRef.current;
+    reset();
+    if (resumeId) {
+      sessionIdRef.current = resumeId;
+      sessionStorage.setItem('directInstallSession', resumeId);
+    }
+    setState('reading');
+    setFileName(file.name);
+    setTotal(file.size);
+    try {
+      const parsed = await parseLocalPkg(file);
+      selectedFileRef.current = file;
+      setDetails(parsed);
+      if (parsed.icon_size) {
+        const url = URL.createObjectURL(file.slice(parsed.icon_offset, parsed.icon_offset + parsed.icon_size, 'image/png'));
+        iconUrlRef.current = url;
+        setIconUrl(url);
+      }
+      setState('selected');
+    } catch (e) {
+      setError(e.message || 'Could not read package details');
+      setState('error');
+    }
+  }, [reset, sessionId, state]);
 
   const cancel = useCallback(async function () {
     cancelRef.current = true;
@@ -79,7 +142,11 @@ export function useDirectUpload() {
       try { wsRef.current.close(); } catch (e) {}
       wsRef.current = null;
     }
-    try { await cancelUpload(); } catch (e) {}
+    try { await cancelUpload(getOwner(), sessionIdRef.current); } catch (e) {}
+    sessionIdRef.current = '';
+    sessionStorage.removeItem('directInstallSession');
+    setSessionId('');
+    setInstalling(false);
     setState('canceled');
   }, [stopStatusPoll]);
 
@@ -99,6 +166,23 @@ export function useDirectUpload() {
           setHeaderReady(true);
           setInstallPath('live:' + sid);
           stopStatusPoll();
+          if (!installCalledRef.current && !cancelRef.current) {
+            installCalledRef.current = true;
+            try {
+              const current = await pollStatus();
+              if (!(current?.is_installing && current.pkg_path === 'live:' + sid)) {
+                await installPackage('live:' + sid);
+              }
+              setInstalling(true);
+              installStartedRef.current = true;
+            } catch (e) {
+              setError(e.message || 'Could not start installation');
+              setState('error');
+              cancelRef.current = true;
+              await cancelUpload(getOwner(), sid).catch(function () {});
+              if (wsRef.current) wsRef.current.close();
+            }
+          }
         }
       } catch (e) {}
     };
@@ -106,14 +190,23 @@ export function useDirectUpload() {
     statusTimerRef.current = setInterval(tick, 2000);
   }, [stopStatusPoll]);
 
-  const upload = useCallback(async function (file) {
+  const upload = useCallback(async function () {
+    const file = selectedFileRef.current;
     if (!file) return;
-    reset();
+    try {
+      const lease = JSON.parse(localStorage.getItem('directInstallLease') || '{}');
+      if (lease.tab && lease.tab !== tabId && Date.now() - lease.time < 10000) {
+        setError('Direct Install is active in another window');
+        return;
+      }
+    } catch (e) {}
     cancelRef.current = false;
     setFileName(file.name);
     setTotal(file.size);
     setState('uploading');
     setError('');
+    installCalledRef.current = false;
+    installStartedRef.current = false;
     const SEG = 1024 * 1024;
     const NSEGS = Math.max(1, Math.ceil(file.size / SEG));
     // Virtual-block-device pusher (WS_fix_plan_2.md): FIFO seek queue
@@ -280,26 +373,35 @@ export function useDirectUpload() {
       }, 5000);
     };
 
-    // Sends {op:finish} once the baseline is fully acked AND the
-    // installer is no longer running. While an install runs we stay in
-    // demand-paging standby (dispatcher serves seeks); if the user never
-    // starts one, we finish right after the upload.
+    // Keep serving seeks until the installer reports a terminal result.
+    // A successful install may not consume every package segment.
     const watchFinish = function () {
       finishTimer = setInterval(async function () {
-        if (done || cancelRef.current) {
+        if (done || finished || cancelRef.current) {
           if (finishTimer) {
             clearInterval(finishTimer);
             finishTimer = null;
           }
           return;
         }
-        if (ackedSet.size < NSEGS) return;
-        let running = false;
+        if (!installStartedRef.current) return;
+        let st;
         try {
-          const st = await pollStatus();
-          running = !!(st && st.is_installing);
-        } catch (e) {}
-        if (running) return;
+          st = await pollStatus();
+        } catch (e) { return; }
+        if (!st || st.is_installing || (!st.completed && !st.failed)) return;
+        if (st.failed) {
+          fail(new Error('Installation failed'));
+          return;
+        }
+        setInstalling(false);
+        if (ackedSet.size < NSEGS) {
+          // The installer may finish without reading every package byte.
+          // No more reader can free the RAM window, so stop the baseline.
+          done = true;
+          completionResolve('');
+          return;
+        }
         if (finishTimer) {
           clearInterval(finishTimer);
           finishTimer = null;
@@ -318,11 +420,14 @@ export function useDirectUpload() {
     };
 
     try {
-      const init = await initUpload(file.name, file.size);
-      baselineSeg = Math.floor((init.offset || 0) / SEG);
+      const init = await initUpload(file.name, file.size, getOwner(), sessionIdRef.current, details || {});
+      baselineSeg = Math.ceil((init.offset || 0) / SEG);
+      for (let s = 0; s < baselineSeg; s++) ackedSet.add(s);
+      sessionIdRef.current = init.session_id || '';
+      sessionStorage.setItem('directInstallSession', sessionIdRef.current);
       setSessionId(init.session_id || '');
-      setOffset(baselineSeg * SEG);
-      setProgress(file.size > 0 ? Math.round(((baselineSeg * SEG) / file.size) * 100) : 0);
+      setOffset(Math.min(file.size, baselineSeg * SEG));
+      setProgress(file.size > 0 ? Math.round((Math.min(file.size, baselineSeg * SEG) / file.size) * 100) : 0);
       if (init.session_id) pollHeader(init.session_id, file.size);
 
       ws = new WebSocket(wsUploadUrl(init.ws_port || 8846));
@@ -334,7 +439,8 @@ export function useDirectUpload() {
       });
 
       // Confirm over the socket (idempotent: same file+total resumes).
-      ws.send(JSON.stringify({ op: 'init', filename: file.name, total: file.size }));
+      ws.send(JSON.stringify({ op: 'init', filename: file.name, total: file.size,
+        owner: getOwner(), session_id: init.session_id }));
       const ready = await waitForMessage(ws, 30000);
       if (ready.op === 'error') throw new Error(ready.error || 'Server refused upload');
       if (ready.op !== 'ready') throw new Error('Bad server reply to init');
@@ -377,7 +483,9 @@ export function useDirectUpload() {
         setState('error');
       }
     }
-  }, [reset, pollHeader]);
+  }, [details, pollHeader, tabId]);
 
-  return { state, progress, offset, total, fileName, sessionId, headerReady, installPath, error, upload, cancel, reset };
+  return { state, progress, offset, total, fileName, sessionId, headerReady,
+    installPath, error, details, iconUrl, installing, selectFile, upload, cancel, reset,
+    owner: getOwner() };
 }
