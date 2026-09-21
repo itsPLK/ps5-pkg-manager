@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback } from 'react';
-import { initUpload, uploadStatus, cancelUpload, checkUploadEligibility, uploadSessionIcon, wsUploadUrl } from '../api/directInstall';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { initUpload, uploadStatus, cancelUpload, cancelUploadOnUnload, checkUploadEligibility, uploadSessionIcon, wsUploadUrl } from '../api/directInstall';
 import { pollStatus, installPackage } from '../api/installer';
 import { parseLocalPkg } from '../utils/parseLocalPkg';
 
@@ -68,6 +68,23 @@ export function useDirectUpload(tabId) {
   const wsRef = useRef(null);
   const statusTimerRef = useRef(null);
   const checkingRef = useRef(false);
+  const unloadCancelSentRef = useRef(false);
+
+  useEffect(function () {
+    const cancelOnUnload = function () {
+      if (!installStartedRef.current || cancelRef.current || unloadCancelSentRef.current) return;
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      unloadCancelSentRef.current = true;
+      cancelUploadOnUnload(getOwner(), sid);
+    };
+    window.addEventListener('beforeunload', cancelOnUnload);
+    window.addEventListener('pagehide', cancelOnUnload);
+    return function () {
+      window.removeEventListener('beforeunload', cancelOnUnload);
+      window.removeEventListener('pagehide', cancelOnUnload);
+    };
+  }, []);
 
   const stopStatusPoll = useCallback(function () {
     if (statusTimerRef.current) {
@@ -78,6 +95,7 @@ export function useDirectUpload(tabId) {
 
   const reset = useCallback(function () {
     cancelRef.current = false;
+    unloadCancelSentRef.current = false;
     stopStatusPoll();
     if (wsRef.current) {
       try { wsRef.current.close(); } catch (e) {}

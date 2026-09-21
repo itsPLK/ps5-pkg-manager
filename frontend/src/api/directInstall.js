@@ -59,6 +59,24 @@ export async function cancelUpload(owner, sessionId) {
   return res.json();
 }
 
+// Browser teardown does not reliably wait for fetch promises. Keep this
+// request tiny and let the browser deliver it while closing the page.
+export function cancelUploadOnUnload(owner, sessionId) {
+  if (!owner || !sessionId) return false;
+  const body = JSON.stringify({ owner, session_id: sessionId });
+  const blob = new Blob([body], { type: 'application/json' });
+  if (navigator.sendBeacon && navigator.sendBeacon('/api/upload/cancel', blob)) return true;
+  try {
+    fetch('/api/upload/cancel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body, keepalive: true
+    }).catch(() => {});
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 export function wsUploadUrl(wsPort) {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
   return proto + '://' + window.location.hostname + ':' + wsPort + '/ws/upload';
