@@ -6,6 +6,7 @@
  */
 
 #include "smb_client.h"
+#include "smb_debug_log.h"
 #include "pkg_cache.h"
 #include "pkg_parser.h"
 #include "icon_blurhash.h"
@@ -22,10 +23,13 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/socket.h>
+#include <poll.h>
 
 #include <smb2/smb2.h>
 #include <smb2/libsmb2.h>
 #include <smb2/smb2-errors.h>
+#include "libsmb2-private.h"
 #include "installer.h"
 
 /* Helper for reading big-endian / little-endian integers */
@@ -418,7 +422,13 @@ static struct smb2_context *smb_connect(const smb_share_config_t *cfg, char *out
     }
 
     smb2_set_timeout(ctx, 10);
-    smb2_set_security_mode(ctx, SMB2_NEGOTIATE_SIGNING_ENABLED);
+    /* Set security_mode to 0 (do not request signing).
+     * If the server REQUIRES signing (e.g. Windows 11 Enterprise), libsmb2
+     * will automatically enable it from the server's NEGOTIATE response.
+     * But if the server only SUPPORTS signing (e.g. Samba / Linux NAS),
+     * setting 0 avoids burning CPU on software AES-CMAC-128 / HMAC-SHA256
+     * on every single incoming data packet, which severely bottlenecks throughput. */
+    smb2_set_security_mode(ctx, 0);
     if (verbose) {
         smb2_register_error_callback(ctx, smb_test_error_cb);
     }
@@ -436,7 +446,7 @@ static struct smb2_context *smb_connect(const smb_share_config_t *cfg, char *out
     }
 
     if (verbose) {
-        install_log("[SMB TEST] Attempting connection -> server='%s', share='%s', user='%s', domain='%s', pass=%s, sec_mode=SIGNING_ENABLED",
+        install_log("[SMB TEST] Attempting connection -> server='%s', share='%s', user='%s', domain='%s', pass=%s, sec_mode=0 (server-required signing allowed)",
                     srv_buf, clean_cfg.share, user,
                     clean_cfg.workgroup[0] ? clean_cfg.workgroup : "WORKGROUP",
                     clean_cfg.password[0] ? "(configured)" : "(none)");
@@ -719,6 +729,12 @@ smb_file_session_t *smb_file_session_open(const char *smb_url) {
     struct smb2_context *ctx = smb_connect(&cfg, NULL, 0, 0);
     if (!ctx) return NULL;
 
+    t_socket sfd = smb2_get_fd(ctx);
+    if (sfd >= 0) {
+        int rcvbuf = 2 * 1024 * 1024; /* 2MB TCP receive buffer */
+        setsockopt(sfd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+    }
+
     const char *open_rel = rel;
     while (*open_rel == '/') open_rel++;
 
@@ -743,18 +759,80 @@ smb_file_session_t *smb_file_session_open(const char *smb_url) {
 
     s->ctx = ctx;
     s->fh = fh;
+    s->local_fd = -1;
     s->file_size = sz;
     strncpy(s->url, smb_url, sizeof(s->url) - 1);
     pthread_mutex_init(&s->mutex, NULL);
+
+    /* Open the streaming debug log for this session.  Logs every read call
+     * with offset, size, returned bytes, wall-clock time and throughput so
+     * we can pinpoint exactly where the speed cap comes from. */
+    smb_debug_log_open(srv, shr, smb_url, sz);
+    /* Log what libsmb2 actually negotiated with the server – this tells us
+     * the real per-request byte ceiling and whether software signing was activated. */
+    install_log("[SMB_DEBUG] Session opened: server=%s share=%s max_read_size=%u dialect=0x%04x sign=%d seal=%d",
+                srv, shr,
+                (unsigned int)smb2_get_max_read_size(ctx),
+                (unsigned int)ctx->dialect,
+                ctx->sign, ctx->seal);
+
     return s;
+}
+
+
+/* Number of SMB2 READ requests to keep in-flight simultaneously. */
+#define SMB_PIPELINE_DEPTH 8
+/* Maximum size of an individual request.  The issue loop below reduces this
+ * when the currently available SMB2 credit window is smaller. */
+#define SMB_PIPELINE_CHUNK (512 * 1024)
+
+typedef struct {
+    int      done;   /* 1 when callback has fired */
+    int      result; /* bytes read (>=0) or -errno */
+} smb_slot_cb_t;
+
+static void smb_pipeline_cb(struct smb2_context *smb2, int status,
+                             void *command_data, void *private_data)
+{
+    (void)smb2;
+    (void)command_data;
+    smb_slot_cb_t *slot = (smb_slot_cb_t *)private_data;
+    slot->result = status; /* >=0 = bytes read, <0 = -errno */
+    slot->done   = 1;
+}
+
+static void smb_file_session_abort_transport(smb_file_session_t *session) {
+    if (!session || !session->ctx) return;
+    smb2_destroy_context(session->ctx);
+    session->ctx = NULL;
+    session->fh = NULL;
+}
+
+/* libsmb2 subtracts credits only when queued PDUs are sent.  Account for
+ * those queued charges here so a second large read is never created with a
+ * stale view of ctx->credits; smb2_pread_async would otherwise silently
+ * shorten it and leave a gap between adjacent pipeline buffers. */
+static int smb_file_session_queued_credits(const struct smb2_context *ctx) {
+    int total = 0;
+    for (const struct smb2_pdu *pdu = ctx ? ctx->outqueue : NULL;
+         pdu != NULL; pdu = pdu->next) {
+        for (const struct smb2_pdu *part = pdu;
+             part != NULL; part = part->next_compound) {
+            int charge = part->header.credit_charge;
+            if (ctx->dialect <= SMB2_VERSION_0202) charge++;
+            total += charge;
+        }
+    }
+    return total;
 }
 
 ssize_t smb_file_session_read(smb_file_session_t *session, void *buf, size_t count, uint64_t offset) {
     if (!session || !buf) return -1;
+    if (count == 0) return 0;
 
     pthread_mutex_lock(&session->mutex);
 
-    if (session->local_fd > 0) {
+    if (session->local_fd >= 0) {
         ssize_t n = pread(session->local_fd, buf, count, (off_t)offset);
         pthread_mutex_unlock(&session->mutex);
         return n;
@@ -765,27 +843,184 @@ ssize_t smb_file_session_read(smb_file_session_t *session, void *buf, size_t cou
         return -1;
     }
 
-    size_t total_read = 0;
-    uint8_t *p = (uint8_t *)buf;
+    /* Pipelined async reads: issue SMB_PIPELINE_DEPTH SMB2 READ
+     * requests before waiting, so multiple requests are in-flight
+     * over the single TCP connection at once.  This hides RTT and
+     * saturates the link instead of serialising on one credit. */
+    uint8_t  *dst          = (uint8_t *)buf;
+    size_t    total_read   = 0;
+    int       stop_issuing = 0;
+    int       discard_inflight = 0;
+    ssize_t   read_error   = 0;
+    int       slots_fired  = 0; /* total slot completions for this call */
 
-    while (total_read < count) {
-        size_t to_read = count - total_read;
-        if (to_read > 64 * 1024) to_read = 64 * 1024;
+    uint64_t call_start_us = smb_dbg_now_us_internal();
 
-        int rc = smb2_pread(session->ctx, session->fh, p + total_read, (uint32_t)to_read, offset + total_read);
-        if (rc < 0) {
-            pthread_mutex_unlock(&session->mutex);
-            return (total_read > 0) ? (ssize_t)total_read : (ssize_t)rc;
-        }
-        if (rc == 0) {
-            break; /* EOF */
-        }
-        total_read += (size_t)rc;
+    /* Slot ring: up to SMB_PIPELINE_DEPTH outstanding requests. */
+    smb_slot_cb_t slots[SMB_PIPELINE_DEPTH];
+    uint8_t      *slot_bufs[SMB_PIPELINE_DEPTH]; /* point into dst */
+    size_t        slot_sizes[SMB_PIPELINE_DEPTH];
+    uint64_t      slot_issue_us[SMB_PIPELINE_DEPTH]; /* when each slot was issued */
+    uint64_t      slot_offsets_dbg[SMB_PIPELINE_DEPTH];
+    uint32_t      slot_req_dbg[SMB_PIPELINE_DEPTH];
+    int           in_flight = 0;
+    int           head = 0; /* oldest in-flight slot */
+    int           tail = 0; /* next slot to issue    */
+    size_t        pipeline_chunk = SMB_PIPELINE_CHUNK;
+
+    uint32_t max_read_size = smb2_get_max_read_size(session->ctx);
+    if (max_read_size > 0 && max_read_size < pipeline_chunk) {
+        pipeline_chunk = max_read_size;
     }
-    pthread_mutex_unlock(&session->mutex);
 
-    return (ssize_t)total_read;
+    uint64_t issue_off = offset; /* next byte to request from the server */
+
+    /* The session has already stat'ed the file.  Avoid sending speculative
+     * reads past EOF, which would otherwise leave later pipeline callbacks
+     * outstanding after the first zero-length response. */
+    size_t target_count = count;
+    if (session->file_size > 0) {
+        if (session->file_size <= offset) {
+            target_count = 0;
+        } else if (session->file_size - offset < (uint64_t)target_count) {
+            target_count = (size_t)(session->file_size - offset);
+        }
+    }
+
+    while ((!stop_issuing && total_read < target_count) || in_flight > 0) {
+
+        /* Issue requests until the pipeline is full or all bytes have been
+         * requested.  For SMB 2.1 and newer, reserve credits already used by
+         * queued PDUs before choosing the next request size. */
+        while (!stop_issuing && in_flight < SMB_PIPELINE_DEPTH
+               && (size_t)(issue_off - offset) < target_count) {
+            size_t to_req = target_count - (size_t)(issue_off - offset);
+            if (to_req > pipeline_chunk) to_req = pipeline_chunk;
+
+            if (session->ctx->dialect > SMB2_VERSION_0202) {
+                int available_credits = session->ctx->credits -
+                                        smb_file_session_queued_credits(session->ctx);
+                if (available_credits <= 0) break;
+                uint64_t credit_bytes = (uint64_t)available_credits * 65536ULL;
+                if ((uint64_t)to_req > credit_bytes) {
+                    to_req = (size_t)credit_bytes;
+                }
+            }
+            if (to_req == 0) break;
+
+            int idx = tail % SMB_PIPELINE_DEPTH;
+            slots[idx].done   = 0;
+            slots[idx].result = 0;
+            slot_bufs[idx]    = dst + (size_t)(issue_off - offset);
+            slot_sizes[idx]   = to_req;
+            slot_issue_us[idx]     = smb_dbg_now_us_internal();
+            slot_offsets_dbg[idx]  = issue_off;
+            slot_req_dbg[idx]      = (uint32_t)to_req;
+
+            int rc = smb2_pread_async(session->ctx, session->fh,
+                                      slot_bufs[idx], (uint32_t)to_req,
+                                      issue_off, smb_pipeline_cb, &slots[idx]);
+            if (rc < 0) {
+                read_error = rc;
+                stop_issuing = 1;
+                break;
+            }
+            issue_off += to_req;
+            in_flight++;
+            tail++;
+        }
+
+        if (in_flight == 0) break;
+
+        /* Drive the event loop until at least the oldest slot completes. */
+        int oldest = head % SMB_PIPELINE_DEPTH;
+        while (!slots[oldest].done) {
+            struct pollfd pfd;
+            pfd.fd     = smb2_get_fd(session->ctx);
+            pfd.events = (short)smb2_which_events(session->ctx);
+            pfd.revents = 0;
+            int poll_rc = poll(&pfd, 1, 5000);
+            if (poll_rc < 0) {
+                if (errno == EINTR) continue;
+                read_error = -1;
+                stop_issuing = 1;
+                smb_file_session_abort_transport(session);
+                in_flight = 0;
+                break;
+            }
+            if (poll_rc == 0) {
+                /* Let libsmb2 expire its own timed out PDUs. */
+                if (smb2_service(session->ctx, 0) < 0) {
+                    read_error = -1;
+                    stop_issuing = 1;
+                    smb_file_session_abort_transport(session);
+                    in_flight = 0;
+                    break;
+                }
+                continue;
+            }
+            if (pfd.revents & POLLNVAL) {
+                read_error = -1;
+                stop_issuing = 1;
+                smb_file_session_abort_transport(session);
+                in_flight = 0;
+                break;
+            }
+            if (smb2_service(session->ctx, pfd.revents) < 0) {
+                read_error = -1;
+                stop_issuing = 1;
+                smb_file_session_abort_transport(session);
+                in_flight = 0;
+                break;
+            }
+        }
+        if (read_error != 0 && session->ctx == NULL) break;
+
+        /* Consume all contiguous completed slots from the head. */
+        while (in_flight > 0) {
+            int idx = head % SMB_PIPELINE_DEPTH;
+            if (!slots[idx].done) break;
+            int res = slots[idx].result;
+            uint64_t rtt_us = smb_dbg_now_us_internal() - slot_issue_us[idx];
+            smb_debug_log_slot(idx, slot_offsets_dbg[idx],
+                               slot_req_dbg[idx], res, rtt_us);
+            slots_fired++;
+            in_flight--;
+            head++;
+            if (discard_inflight) continue;
+            if (res < 0) {
+                read_error = res;
+                stop_issuing = 1;
+                discard_inflight = 1;
+                continue;
+            }
+            if (res == 0) {
+                /* EOF — stop requesting more. */
+                stop_issuing = 1;
+                discard_inflight = 1;
+                continue;
+            }
+            total_read += (size_t)res;
+            if ((size_t)res < slot_sizes[idx]) {
+                /* With one-credit requests this is an EOF/short-read
+                 * indication.  Drain callbacks already in flight, but do
+                 * not issue or count bytes from later speculative offsets. */
+                stop_issuing = 1;
+                discard_inflight = 1;
+            }
+        }
+    }
+
+    uint64_t call_elapsed_us = smb_dbg_now_us_internal() - call_start_us;
+    smb_debug_log_read(offset, count, (ssize_t)total_read, call_elapsed_us, slots_fired);
+
+    pthread_mutex_unlock(&session->mutex);
+    if (total_read > 0) return (ssize_t)total_read;
+    return read_error != 0 ? read_error : 0;
 }
+
+
+
 
 uint64_t smb_file_session_get_size(smb_file_session_t *session) {
     return session ? session->file_size : 0;
@@ -794,9 +1029,9 @@ uint64_t smb_file_session_get_size(smb_file_session_t *session) {
 void smb_file_session_close(smb_file_session_t *session) {
     if (!session) return;
     pthread_mutex_lock(&session->mutex);
-    if (session->local_fd > 0) {
+    if (session->local_fd >= 0) {
         close(session->local_fd);
-        session->local_fd = 0;
+        session->local_fd = -1;
     }
     if (session->ctx && session->fh) {
         smb2_close(session->ctx, session->fh);
@@ -808,6 +1043,7 @@ void smb_file_session_close(smb_file_session_t *session) {
     }
     pthread_mutex_unlock(&session->mutex);
     pthread_mutex_destroy(&session->mutex);
+    smb_debug_log_close();
     free(session);
 }
 

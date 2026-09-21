@@ -11,6 +11,8 @@
 struct smb2_context {
     char server[128];
     char share[128];
+    int credits;
+    uint16_t dialect;
 };
 
 struct smb2dir {
@@ -36,7 +38,12 @@ struct smb2fh {
 #define SMB2_TYPE_DIRECTORY 2
 
 struct smb2_context *smb2_init_context(void) {
-    return (struct smb2_context *)calloc(1, sizeof(struct smb2_context));
+    struct smb2_context *ctx = (struct smb2_context *)calloc(1, sizeof(struct smb2_context));
+    if (ctx) {
+        ctx->credits = 128;
+        ctx->dialect = 0x0300;
+    }
+    return ctx;
 }
 
 void smb2_destroy_context(struct smb2_context *smb2) {
@@ -172,3 +179,38 @@ int smb2_stat(struct smb2_context *smb2, const char *path, struct smb2_stat_64 *
 
 int smb2_mkdir(struct smb2_context *smb2, const char *path) { (void)smb2; (void)path; return -1; }
 int smb2_rmdir(struct smb2_context *smb2, const char *path) { (void)smb2; (void)path; return -1; }
+
+uint32_t smb2_get_max_read_size(struct smb2_context *smb2) {
+    (void)smb2;
+    return 1048576;
+}
+
+int smb2_get_fd(struct smb2_context *smb2) {
+    (void)smb2;
+    return 0;
+}
+
+int smb2_which_events(struct smb2_context *smb2) {
+    (void)smb2;
+    return 1;
+}
+
+int smb2_service(struct smb2_context *smb2, int revents) {
+    (void)smb2;
+    (void)revents;
+    return 0;
+}
+
+typedef void (*smb2_command_cb_t)(struct smb2_context *smb2, int status,
+                                  void *command_data, void *private_data);
+
+int smb2_pread_async(struct smb2_context *smb2, struct smb2fh *fh,
+                     uint8_t *buf, uint32_t count, uint64_t offset,
+                     smb2_command_cb_t cb, void *cb_data) {
+    if (!fh || !buf) return -1;
+    ssize_t n = pread(fh->fd, buf, count, (off_t)offset);
+    if (cb) {
+        cb(smb2, (int)n, NULL, cb_data);
+    }
+    return 0;
+}

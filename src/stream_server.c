@@ -9,6 +9,7 @@
 #include "multipart.h"
 #include "installer.h"
 #include "stream_debug_log.h"
+#include "smb_client.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,7 +26,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define STREAM_SEND_CHUNK (64 * 1024)
+#define STREAM_SEND_CHUNK (2048 * 1024)
 #define STREAM_REQ_MAX (16 * 1024)
 #define STREAM_IO_TIMEOUT_SEC 30
 
@@ -350,7 +351,8 @@ typedef enum { SERVE_CLOSE = 0, SERVE_KEEP = 1 } serve_verdict_t;
 
 static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer,
                                          uint64_t t_start_ms, int req_no,
-                                         char *req, size_t rlen);
+                                         char *req, size_t rlen,
+                                         smb_file_session_t *conn_smb);
 
 static void serve_connection(int conn, int conn_id, const char *peer_str) {
     const char *peer = (peer_str && peer_str[0] != '\0') ? peer_str : "unknown";
@@ -372,6 +374,26 @@ static void serve_connection(int conn, int conn_id, const char *peer_str) {
     tv.tv_usec = 0;
     setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(conn, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    /* For SMB streams: open a dedicated SMB session for this connection so
+     * concurrent range requests from the PS5 read from the NAS in parallel
+     * over independent TCP connections without lock contention or seek jitter. */
+    smb_file_session_t *conn_smb = NULL;
+    virtual_stream_t *vp_init = stream_vs_acquire();
+    if (vp_init != NULL) {
+        const char *smb_url = virtual_stream_get_smb_url(vp_init);
+        if (smb_url != NULL) {
+            conn_smb = smb_file_session_open(smb_url);
+            if (conn_smb) {
+                install_log("[STREAM] conn #%d peer=%s opened private SMB session for parallel read",
+                            conn_id, peer);
+            } else {
+                install_log("[STREAM] conn #%d peer=%s WARNING: failed to open private SMB session, using fallback",
+                            conn_id, peer);
+            }
+        }
+        stream_vs_release();
+    }
 
     stream_debug_log("[STREAM] conn #%d start fd=%d peer=%s workers=%d",
                      conn_id, conn, peer, workers_now);
@@ -458,7 +480,7 @@ static void serve_connection(int conn, int conn_id, const char *peer_str) {
             }
         }
 
-        serve_verdict_t v = serve_one_request(conn, conn_id, peer, t_start_ms, req_no, req, rlen);
+        serve_verdict_t v = serve_one_request(conn, conn_id, peer, t_start_ms, req_no, req, rlen, conn_smb);
         reqs_served++;
         if (overflow) {
             v = SERVE_CLOSE;
@@ -466,6 +488,11 @@ static void serve_connection(int conn, int conn_id, const char *peer_str) {
         if (v == SERVE_CLOSE) {
             break;
         }
+    }
+
+    if (conn_smb != NULL) {
+        smb_file_session_close(conn_smb);
+        conn_smb = NULL;
     }
 
     stream_debug_log("[STREAM] conn #%d peer=%s finished reqs=%d (elapsed=%llums)",
@@ -477,7 +504,8 @@ static void serve_connection(int conn, int conn_id, const char *peer_str) {
 
 static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer,
                                          uint64_t t_start_ms, int req_no,
-                                         char *req, size_t rlen) {
+                                         char *req, size_t rlen,
+                                         smb_file_session_t *conn_smb) {
 
     char line[512];
     size_t li = 0;
@@ -797,7 +825,12 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
     while (vp != NULL && off <= end && g_ss.running) {
         uint64_t remain = end - off + 1;
         size_t want = (remain > STREAM_SEND_CHUNK) ? STREAM_SEND_CHUNK : (size_t)remain;
-        ssize_t n = virtual_stream_read(vp, off, sbuf, want);
+        ssize_t n;
+        if (conn_smb != NULL) {
+            n = smb_file_session_read(conn_smb, sbuf, want, off);
+        } else {
+            n = virtual_stream_read(vp, off, sbuf, want);
+        }
         if (n <= 0) {
             end_reason = "read-short";
             install_log("[STREAM] conn #%d peer=%s body read short at off=%llu want=%zu (res: %zd reason=%s)",

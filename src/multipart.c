@@ -808,3 +808,9 @@ void virtual_stream_close(virtual_stream_t *stream) {
         stream->lock_inited = 0;
     }
 }
+
+const char *virtual_stream_get_smb_url(const virtual_stream_t *stream) {
+    if (!stream || !stream->is_smb) return NULL;
+    if (stream->parts[0].path[0] == '\0') return NULL;
+    return stream->parts[0].path;
+}

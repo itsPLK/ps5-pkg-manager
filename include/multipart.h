@@ -138,6 +138,13 @@ int virtual_stream_open(const char *initial_path, virtual_stream_t *stream);
 ssize_t virtual_stream_read(virtual_stream_t *stream, uint64_t pkg_offset, void *buf, size_t count);
 void virtual_stream_close(virtual_stream_t *stream);
 
+/**
+ * For SMB streams: returns the smb:// URL of the backing file so the caller
+ * can open its own private SMB session for parallel reads.  Returns NULL for
+ * non-SMB streams.
+ */
+const char *virtual_stream_get_smb_url(const virtual_stream_t *stream);
+
 #ifdef __cplusplus
 }
 #endif
