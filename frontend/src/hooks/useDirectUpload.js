@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { initUpload, uploadStatus, cancelUpload, checkUploadEligibility, wsUploadUrl } from '../api/directInstall';
+import { initUpload, uploadStatus, cancelUpload, checkUploadEligibility, uploadSessionIcon, wsUploadUrl } from '../api/directInstall';
 import { pollStatus, installPackage } from '../api/installer';
 import { parseLocalPkg } from '../utils/parseLocalPkg';
 
@@ -453,6 +453,10 @@ export function useDirectUpload(tabId) {
       setSessionId(init.session_id || '');
       setOffset(Math.min(file.size, baselineSeg * SEG));
       setProgress(file.size > 0 ? Math.round((Math.min(file.size, baselineSeg * SEG) / file.size) * 100) : 0);
+      if (init.session_id && details?.icon_size) {
+        const icon = file.slice(details.icon_offset, details.icon_offset + details.icon_size, 'image/png');
+        try { await uploadSessionIcon(getOwner(), init.session_id, icon); } catch (e) {}
+      }
       if (init.session_id) pollHeader(init.session_id, file.size);
 
       ws = new WebSocket(wsUploadUrl(init.ws_port || 8846));

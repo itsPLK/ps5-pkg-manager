@@ -69,6 +69,19 @@ static char g_owner_sid[64];
 static char g_owner_filename[256];
 static uint64_t g_owner_total;
 static char g_meta_title[256], g_meta_id[64], g_meta_version[32], g_meta_kind[16];
+static pthread_mutex_t g_icon_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint8_t *g_icon_data;
+static size_t g_icon_size;
+static char g_icon_sid[64];
+
+static void clear_icon(void) {
+    pthread_mutex_lock(&g_icon_mu);
+    free(g_icon_data);
+    g_icon_data = NULL;
+    g_icon_size = 0;
+    g_icon_sid[0] = '\0';
+    pthread_mutex_unlock(&g_icon_mu);
+}
 
 static void live_init(void) {
     static int once = 0;
@@ -141,6 +154,7 @@ int ws_direct_init_owned(const char *filename, uint64_t total_size,
     }
     int rc = ws_direct_init_session(filename, total_size, out_session_id, sid_max);
     if (rc == 0) {
+        clear_icon();
         snprintf(g_owner, sizeof(g_owner), "%s", owner);
         snprintf(g_owner_sid, sizeof(g_owner_sid), "%s", out_session_id);
         snprintf(g_owner_filename, sizeof(g_owner_filename), "%s", filename);
@@ -179,6 +193,50 @@ int ws_direct_get_metadata(const char *sid, char *title, size_t title_max,
         if (kind && kind_max) snprintf(kind, kind_max, "%s", g_meta_kind);
     }
     pthread_mutex_unlock(&g_owner_mu);
+    return ok ? 0 : -1;
+}
+
+int ws_direct_set_icon(const char *owner, const char *sid,
+                       const uint8_t *png, size_t size) {
+    static const uint8_t signature[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    if (!owner || !sid || !png || size < sizeof(signature) ||
+        size > WS_DIRECT_ICON_MAX || memcmp(png, signature, sizeof(signature)) != 0)
+        return -1;
+    uint8_t *copy = malloc(size);
+    if (!copy) return -1;
+    memcpy(copy, png, size);
+    pthread_mutex_lock(&g_owner_mu);
+    int ok = g_owner[0] && strcmp(owner, g_owner) == 0 &&
+             strcmp(sid, g_owner_sid) == 0 && ws_live_check_id(sid);
+    if (ok) {
+        pthread_mutex_lock(&g_icon_mu);
+        free(g_icon_data);
+        g_icon_data = copy;
+        g_icon_size = size;
+        snprintf(g_icon_sid, sizeof(g_icon_sid), "%s", sid);
+        pthread_mutex_unlock(&g_icon_mu);
+    }
+    pthread_mutex_unlock(&g_owner_mu);
+    if (!ok) free(copy);
+    return ok ? 0 : -1;
+}
+
+int ws_direct_get_icon(const char *sid, uint8_t **out_png, size_t *out_size) {
+    if (!sid || !out_png || !out_size || !ws_live_check_id(sid)) return -1;
+    *out_png = NULL;
+    *out_size = 0;
+    pthread_mutex_lock(&g_icon_mu);
+    int ok = g_icon_data && strcmp(sid, g_icon_sid) == 0;
+    if (ok) {
+        *out_png = malloc(g_icon_size);
+        if (*out_png) {
+            memcpy(*out_png, g_icon_data, g_icon_size);
+            *out_size = g_icon_size;
+        } else {
+            ok = 0;
+        }
+    }
+    pthread_mutex_unlock(&g_icon_mu);
     return ok ? 0 : -1;
 }
 
@@ -231,10 +289,12 @@ void ws_direct_cancel_session(void) {
     pthread_mutex_unlock(&g_uplink_mu);
     ws_live_abort();
     ws_live_destroy();
+    clear_icon();
 }
 
 void ws_direct_reset_for_tests(void) {
     ws_live_reset_for_tests();
+    clear_icon();
     pthread_mutex_lock(&g_owner_mu);
     g_owner[0] = g_owner_sid[0] = '\0';
     pthread_mutex_unlock(&g_owner_mu);

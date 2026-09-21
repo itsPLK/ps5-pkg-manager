@@ -540,7 +540,7 @@ let installInterval = null;
 
 // Direct-install mock session (memory-backed like the device RAM ring).
 const WS_MOCK_PORT = 8846;
-const mockUpload = { active: false, id: '', filename: '', total: 0, received: 0, buf: null };
+const mockUpload = { active: false, id: '', owner: '', filename: '', total: 0, received: 0, buf: null, icon: null };
 
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -624,6 +624,16 @@ const server = http.createServer(async (req, res) => {
   // 5. High-Resolution Clean Cover Art API (No text, no tags, no badges)
   if ((req.method === 'GET' || req.method === 'HEAD') && pathname === '/api/icon') {
     const pkgPath = parsedUrl.searchParams.get('path');
+    if (pkgPath?.startsWith('live:')) {
+      if (mockUpload.active && pkgPath === 'live:' + mockUpload.id && mockUpload.icon) {
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
+        res.end(req.method === 'HEAD' ? undefined : mockUpload.icon);
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+      return;
+    }
     const pkg = examplePkgs.find(p => p.path === pkgPath) || {
       title_id: 'PPSA01001'
     };
@@ -891,6 +901,19 @@ const server = http.createServer(async (req, res) => {
       req.on('end', () => resolve(b));
     });
     const liveUri = () => 'live:' + mockUpload.id;
+    if (req.method === 'POST' && pathname === '/api/upload/icon') {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const icon = Buffer.concat(chunks);
+      const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const valid = mockUpload.active && req.headers['x-direct-owner'] === mockUpload.owner &&
+        req.headers['x-direct-session'] === mockUpload.id &&
+        icon.length >= 8 && icon.length <= 10 * 1024 * 1024 && icon.subarray(0, 8).equals(signature);
+      if (valid) mockUpload.icon = icon;
+      res.writeHead(valid ? 200 : 400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: valid }));
+      return;
+    }
     if (req.method === 'POST' && pathname === '/api/upload/check') {
       let details = {};
       try { details = JSON.parse(await readBody() || '{}'); } catch (e) {}
@@ -941,10 +964,12 @@ const server = http.createServer(async (req, res) => {
       if (!mockUpload.active) {
         mockUpload.active = true;
         mockUpload.id = crypto.randomBytes(8).toString('hex');
+        mockUpload.owner = parsed.owner || '';
         mockUpload.filename = filename;
         mockUpload.total = total;
         mockUpload.received = 0;
         mockUpload.buf = Buffer.alloc(total);
+        mockUpload.icon = null;
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, session_id: mockUpload.id, offset: mockUpload.received, ws_port: WS_MOCK_PORT }));
@@ -979,6 +1004,7 @@ const server = http.createServer(async (req, res) => {
       mockUpload.active = false;
       mockUpload.received = 0;
       mockUpload.buf = null;
+      mockUpload.icon = null;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true }));
       return;
@@ -1131,6 +1157,7 @@ function mockWsUpgrade(req, sock) {
           mockUpload.active = false;
           mockUpload.received = 0;
           mockUpload.buf = null;
+          mockUpload.icon = null;
           mockUpload.present = null;
           wsSendText(sock, { op: 'cancelled' });
         } else if (msg.op === 'seg') {

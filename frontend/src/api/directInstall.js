@@ -22,6 +22,19 @@ export async function checkUploadEligibility(details) {
   return data;
 }
 
+export async function uploadSessionIcon(owner, sessionId, icon) {
+  const res = await fetch('/api/upload/icon', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'image/png',
+      'X-Direct-Owner': owner,
+      'X-Direct-Session': sessionId
+    },
+    body: icon
+  });
+  if (!res.ok) throw new Error('Could not share package icon');
+}
+
 export async function uploadStatus() {
   const res = await fetch('/api/upload/status');
   if (!res.ok) throw new Error('Status failed: ' + res.status);

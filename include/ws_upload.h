@@ -42,6 +42,7 @@ extern "C" {
 #define WS_DIRECT_SESSION_ID_MAX 64
 #define WS_DIRECT_FILENAME_MAX 256
 #define WS_DIRECT_MAX_TOTAL (256ULL * 1024 * 1024 * 1024) /* sanity cap */
+#define WS_DIRECT_ICON_MAX (10 * 1024 * 1024)
 
 /* Create a live session. out_session_id gets a hex id.
  * Returns 0 on ok, -2 if another session is active, -1 on error.
@@ -61,6 +62,12 @@ void ws_direct_set_metadata(const char *owner, const char *sid,
 int ws_direct_get_metadata(const char *sid, char *title, size_t title_max,
                            char *title_id, size_t id_max, char *version,
                            size_t version_max, char *kind, size_t kind_max);
+
+/* Session icon stays in RAM and is served to all browser sessions. The
+ * returned icon copy belongs to the caller; free it after use. */
+int ws_direct_set_icon(const char *owner, const char *sid,
+                       const uint8_t *png, size_t size);
+int ws_direct_get_icon(const char *sid, uint8_t **out_png, size_t *out_size);
 
 /* Append a chunk at the current offset. Must be in-order; may block on
  * reader backpressure. Returns 0 on ok, -3 on offset mismatch

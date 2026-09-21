@@ -191,10 +191,21 @@ static void test_owned_session_isolation(void) {
     assert(ws_direct_init_owned("same.pkg", 2ULL * WS_LIVE_SEG_SIZE,
                                 owner_a, sid, resumed, sizeof(resumed)) == 0);
     assert(strcmp(sid, resumed) == 0);
+    const uint8_t icon[] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x42};
+    uint8_t *icon_copy = NULL;
+    size_t icon_size = 0;
+    assert(ws_direct_set_icon(owner_b, sid, icon, sizeof(icon)) == -1);
+    assert(ws_direct_set_icon(owner_a, sid, icon, 7) == -1);
+    assert(ws_direct_set_icon(owner_a, sid, icon, sizeof(icon)) == 0);
+    assert(ws_direct_get_icon("wrong", &icon_copy, &icon_size) == -1);
+    assert(ws_direct_get_icon(sid, &icon_copy, &icon_size) == 0);
+    assert(icon_size == sizeof(icon) && memcmp(icon_copy, icon, icon_size) == 0);
+    free(icon_copy);
     assert(ws_direct_cancel_owned(owner_b, sid) == -1);
     assert(ws_direct_session_active());
     assert(ws_direct_cancel_owned(owner_a, sid) == 0);
     assert(!ws_direct_session_active());
+    assert(ws_direct_get_icon(sid, &icon_copy, &icon_size) == -1);
     printf("  owned-session-isolation ok\n");
     reset();
 }

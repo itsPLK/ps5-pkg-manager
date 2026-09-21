@@ -158,7 +158,9 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
     if (strcmp(method, "POST") == 0 && *upload_data_size != 0) {
         post_state_t *ps = (post_state_t *)*con_cls;
         if (!ps) return MHD_NO;
-        if (ps->oversize || ps->size + *upload_data_size + 1 > MAX_POST_BODY_SIZE) {
+        size_t body_limit = strcmp(url, "/api/upload/icon") == 0
+            ? WS_DIRECT_ICON_MAX : MAX_POST_BODY_SIZE - 1;
+        if (ps->oversize || *upload_data_size > body_limit - ps->size) {
             ps->oversize = 1;
             *upload_data_size = 0;
             return MHD_YES;
@@ -195,6 +197,22 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
      * untouched logic below. Chunk bytes travel over the WS listener
      * (:8846, ws_upload.c), never through MHD/Post bodies. */
     if (strncmp(url, "/api/upload/", 12) == 0) {
+        if (strcmp(method, "POST") == 0 && strcmp(url, "/api/upload/icon") == 0) {
+            post_state_t *ps = (post_state_t *)*con_cls;
+            const char *owner = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "X-Direct-Owner");
+            const char *sid = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "X-Direct-Session");
+            int ok = ps && ps->data && owner && sid &&
+                ws_direct_set_icon(owner, sid, (const uint8_t *)ps->data, ps->size) == 0;
+            const char *body = ok ? "{\"success\":true}" : "{\"success\":false}";
+            struct MHD_Response *resp = MHD_create_response_from_buffer(
+                strlen(body), (void *)body, MHD_RESPMEM_MUST_COPY);
+            add_cors_headers(resp);
+            MHD_add_response_header(resp, "Content-Type", "application/json");
+            enum MHD_Result ret = MHD_queue_response(conn,
+                ok ? MHD_HTTP_OK : MHD_HTTP_BAD_REQUEST, resp);
+            MHD_destroy_response(resp);
+            return ret;
+        }
         /* Check local package metadata before offering a direct installation. */
         if (strcmp(method, "POST") == 0 && strcmp(url, "/api/upload/check") == 0) {
             post_state_t *ps = (post_state_t *)*con_cls;
@@ -535,7 +553,21 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
     /* ── GET /api/icon ─────────────────────────────────────────── */
     if (strcmp(method, "GET") == 0 && strcmp(url, "/api/icon") == 0) {
         const char *pkg_path = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "path");
-        if (pkg_path && pkg_path[0] != '\0') {
+        if (pkg_path && strncmp(pkg_path, "live:", 5) == 0) {
+            uint8_t *icon_data = NULL;
+            size_t icon_size = 0;
+            if (ws_direct_get_icon(pkg_path + 5, &icon_data, &icon_size) == 0) {
+                struct MHD_Response *resp = MHD_create_response_from_buffer(
+                    icon_size, icon_data, MHD_RESPMEM_MUST_FREE);
+                add_cors_headers(resp);
+                MHD_add_response_header(resp, "Content-Type", "image/png");
+                MHD_add_response_header(resp, "Cache-Control", "no-store");
+                enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_OK, resp);
+                MHD_destroy_response(resp);
+                return ret;
+            }
+        }
+        if (pkg_path && pkg_path[0] != '\0' && strncmp(pkg_path, "live:", 5) != 0) {
             int is_smb = (strncmp(pkg_path, "smb://", 6) == 0);
             uint8_t *icon_data = NULL;
             size_t icon_size = 0;
