@@ -680,6 +680,7 @@ struct smb_file_session {
     int local_fd;
     uint64_t file_size;
     char url[512];
+    int debug_enabled;
     pthread_mutex_t mutex;
 };
 
@@ -762,19 +763,23 @@ smb_file_session_t *smb_file_session_open(const char *smb_url) {
     s->local_fd = -1;
     s->file_size = sz;
     strncpy(s->url, smb_url, sizeof(s->url) - 1);
+    app_settings_t debug_settings;
+    pkg_cache_get_settings(&debug_settings);
+    s->debug_enabled = debug_settings.pkg_install_debug ? 1 : 0;
     pthread_mutex_init(&s->mutex, NULL);
 
     /* Open the streaming debug log for this session.  Logs every read call
      * with offset, size, returned bytes, wall-clock time and throughput so
      * we can pinpoint exactly where the speed cap comes from. */
-    smb_debug_log_open(srv, shr, smb_url, sz);
-    /* Log what libsmb2 actually negotiated with the server – this tells us
-     * the real per-request byte ceiling and whether software signing was activated. */
-    install_log("[SMB_DEBUG] Session opened: server=%s share=%s max_read_size=%u dialect=0x%04x sign=%d seal=%d",
-                srv, shr,
-                (unsigned int)smb2_get_max_read_size(ctx),
-                (unsigned int)ctx->dialect,
-                ctx->sign, ctx->seal);
+    if (s->debug_enabled) {
+        smb_debug_log_open(srv, shr, smb_url, sz);
+        /* Log what libsmb2 negotiated with the server. */
+        install_log("[SMB_DEBUG] Session opened: server=%s share=%s max_read_size=%u dialect=0x%04x sign=%d seal=%d",
+                    srv, shr,
+                    (unsigned int)smb2_get_max_read_size(ctx),
+                    (unsigned int)ctx->dialect,
+                    ctx->sign, ctx->seal);
+    }
 
     return s;
 }
@@ -982,8 +987,10 @@ ssize_t smb_file_session_read(smb_file_session_t *session, void *buf, size_t cou
             if (!slots[idx].done) break;
             int res = slots[idx].result;
             uint64_t rtt_us = smb_dbg_now_us_internal() - slot_issue_us[idx];
-            smb_debug_log_slot(idx, slot_offsets_dbg[idx],
-                               slot_req_dbg[idx], res, rtt_us);
+            if (session->debug_enabled) {
+                smb_debug_log_slot(idx, slot_offsets_dbg[idx],
+                                   slot_req_dbg[idx], res, rtt_us);
+            }
             slots_fired++;
             in_flight--;
             head++;
@@ -1012,7 +1019,9 @@ ssize_t smb_file_session_read(smb_file_session_t *session, void *buf, size_t cou
     }
 
     uint64_t call_elapsed_us = smb_dbg_now_us_internal() - call_start_us;
-    smb_debug_log_read(offset, count, (ssize_t)total_read, call_elapsed_us, slots_fired);
+    if (session->debug_enabled) {
+        smb_debug_log_read(offset, count, (ssize_t)total_read, call_elapsed_us, slots_fired);
+    }
 
     pthread_mutex_unlock(&session->mutex);
     if (total_read > 0) return (ssize_t)total_read;
@@ -1043,7 +1052,9 @@ void smb_file_session_close(smb_file_session_t *session) {
     }
     pthread_mutex_unlock(&session->mutex);
     pthread_mutex_destroy(&session->mutex);
-    smb_debug_log_close();
+    if (session->debug_enabled) {
+        smb_debug_log_close();
+    }
     free(session);
 }
 
