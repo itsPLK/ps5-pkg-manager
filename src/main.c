@@ -133,7 +133,10 @@ __attribute__((used)) volatile const char pkgmgr_version_sig[] = "PKGMGR_VER:" P
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
-    ps5_notify("PKG Manager v%s starting...", PKGMGR_VERSION);
+    /* Write directly to stdout before any service call. Payload loaders may
+     * capture stdout even when the process fails before printf can flush. */
+    static const char entered_main[] = "[PKG Manager] entered main\n";
+    (void)write(STDOUT_FILENO, entered_main, sizeof(entered_main) - 1);
 
 #if defined(__Prospero__) || defined(PS5_BUILD)
     syscall(SYS_thr_set_name, -1, "pkgmgr.elf");
@@ -147,6 +150,8 @@ int main(int argc, char **argv) {
         }
         sleep(1);
     }
+    static const char process_check_done[] = "[PKG Manager] process check complete\n";
+    (void)write(STDOUT_FILENO, process_check_done, sizeof(process_check_done) - 1);
 #endif
 
     printf("[PKG Manager] Starting PKG Manager v%s (%s, %s)...\n",
@@ -176,6 +181,9 @@ int main(int argc, char **argv) {
         ps5_notify("PKG Manager: user service init returned 0x%08X", user_result);
     }
 #endif
+    static const char services_done[] = "[PKG Manager] service initialization complete\n";
+    (void)write(STDOUT_FILENO, services_done, sizeof(services_done) - 1);
+    ps5_notify("PKG Manager v%s starting...", PKGMGR_VERSION);
 
     int port = DEFAULT_HTTP_PORT;
     char server_url[128];

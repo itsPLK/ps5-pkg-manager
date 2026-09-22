@@ -18,7 +18,7 @@ LIBS     := $(TARGET)/lib/libmicrohttpd.a \
             $(LIBSMB2) \
             -L$(TARGET)/lib -lpthread \
             -lSceNetCtl -lSceUserService -lSceSystemService \
-            -lSceAppInstUtil -lSceIpmi -lSceNet
+            -lSceAppInstUtil -lSceNet
 
 SRCS := src/main.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c src/smb_client.c src/smb_debug_log.c src/installer.c \
         src/http_server.c src/stream_server.c src/stream_debug_log.c src/notification.c \

@@ -22,7 +22,6 @@
 
 int sceAppInstUtilInitialize(void);
 int sceAppInstUtilTerminate(void);
-int sceAppInstUtilAppInstallTitleDir(const char *title_id, const char *dir, void *reserved);
 int sceAppInstUtilAppInstallAll(void *reserved);
 int sceAppInstUtilAppUnInstall(const char *title_id);
 #endif
@@ -53,8 +52,9 @@ static int install_app(const char *title_id, const char *dir) {
         return dyn_install_title_dir(title_id, dir, 0);
     }
 
-    /* Fallback to direct SDK call */
-    return sceAppInstUtilAppInstallTitleDir(title_id, dir, 0);
+    /* Match the working Payload Manager fallback: this API registers the
+     * files already written beneath /user/app/. */
+    return sceAppInstUtilAppInstallAll(0);
 #else
     (void)title_id;
     (void)dir;
