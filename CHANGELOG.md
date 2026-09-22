@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.2.3
+
+### Startup Reliability
+- Fixed startup failures affecting some users by making process discovery safer across PS5 environments, improving initialization ordering, and adding earlier diagnostics and notifications when startup steps fail
+
+### Installation
+- Fixed the Base + Update handoff so the update is queued by the native installer and continues even if the browser is closed after starting the base installation
+
+### SMB Network Shares
+- Added guided share selection and folder browsing, so share names and paths no longer need to be entered manually
+- Preserve saved credentials when browsing an edited share whose password is masked in the UI, avoiding accidental guest logins
+- Treat SMB sources consistently as read-only without attempting a network write-permission probe
+
+### Browser Navigation
+- Fixed browser Back/Forward navigation so returning to the app after visiting another page preserves the app's main page and menu history
+
+---
+
 ## v1.2.2
 
 ### Package Detection

@@ -24,10 +24,10 @@
 
 ## Installation
 
-Download the latest `pkgmgr.elf` from the [Releases](https://github.com/itsPLK/ps5-pkg-manager/releases) page.
+Download the latest versioned ELF (for example, `pkg-manager_v1.2.3.elf`) from the [Releases](https://github.com/itsPLK/ps5-pkg-manager/releases) page.
 
-- **Payload Manager (Recommended)**: Use [Payload Manager](https://github.com/itsPLK/ps5-payload-manager) to launch `pkgmgr.elf` automatically.
-- **Manual ELF Loading**: You can load `pkgmgr.elf` like any other standard ELF payload.
+- **Payload Manager (Recommended)**: Use [Payload Manager](https://github.com/itsPLK/ps5-payload-manager) to launch the downloaded ELF automatically.
+- **Manual ELF Loading**: You can load the downloaded ELF like any other standard ELF payload.
 
 ## Usage
 
