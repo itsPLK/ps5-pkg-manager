@@ -84,21 +84,20 @@ export function getHistoryChain(route) {
 export function seedHistory(route) {
   if (!window.history || !window.history.pushState || !window.history.replaceState) return;
 
-  // Establish a baseline entry at root path (without hash) so that pressing Circle on the
-  // root 'drives' view always has a preceding entry to pop into, reliably firing popstate
-  // to close the browser without needing to visit another view first.
-  try {
-    const basePath = window.location.pathname + window.location.search;
-    window.history.replaceState({ type: 'root', hash: '' }, '', basePath);
-  } catch (e) {}
-
+  // Reuse the current document entry for the app root. Adding a second, hashless
+  // baseline entry here makes Back from the root require another history.back(),
+  // which corrupts the browser's Forward stack when the app is re-entered.
   const chain = getHistoryChain(route);
   for (let i = 0; i < chain.length; i++) {
     const r = chain[i];
     const hash = formatHash(r);
     const state = { ...r, hash };
     try {
-      window.history.pushState(state, '', hash);
+      if (i === 0 && window.history.replaceState) {
+        window.history.replaceState(state, '', hash);
+      } else {
+        window.history.pushState(state, '', hash);
+      }
     } catch (e) {}
   }
 }
@@ -145,6 +144,7 @@ export function useHistoryNavigation(props) {
   const currentRouteRef = useRef({ type: 'drives' });
   const initialRouteRef = useRef(initialRoute || { type: 'drives' });
   const initialRouteAppliedRef = useRef(false);
+  const historySeededRef = useRef(false);
 
   const drivesRef = useRef(drives);
   useEffect(() => {
@@ -229,6 +229,8 @@ export function useHistoryNavigation(props) {
 
   // Seed history on mount
   useEffect(() => {
+    if (historySeededRef.current) return;
+    historySeededRef.current = true;
     const hashRoute = getRouteFromHash(window.location.hash);
     const startRoute = (hashRoute.type !== 'drives') ? hashRoute : (initialRoute || { type: 'drives' });
     currentRouteRef.current = startRoute;
@@ -340,12 +342,19 @@ export function useHistoryNavigation(props) {
         return;
       }
 
-      // 3. Check what view the user was looking at before this pop
+      // 3. Read the destination before deciding whether this is a request to
+      // leave the app. A popstate is emitted for both Back and Forward, so
+      // looking only at the view that was rendered before the pop misclassifies
+      // Forward from the root view as another Back and can walk into the page
+      // that opened the app.
+      const target = getRouteFromHash(window.location.hash);
       const currentView = getActiveViewType();
 
       // If the user was ALREADY on the root list of storage media (DrivesView)
       // and pressed Circle / Back, close the PS5 browser!
-      if (currentView === 'drives') {
+      // A Forward navigation from the root has a non-root target and must be
+      // handled as a normal route transition below.
+      if (currentView === 'drives' && target.type === 'drives') {
         try {
           window.close();
         } catch (e) {}
@@ -356,7 +365,6 @@ export function useHistoryNavigation(props) {
       }
 
       // 4. Normal view transition from popped history
-      const target = getRouteFromHash(window.location.hash);
       currentRouteRef.current = target;
 
       if (target.type === 'smb') {
