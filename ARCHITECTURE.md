@@ -363,6 +363,7 @@ To eliminate slow cold scans upon daemon restart and drive navigation:
      - If modified or added: re-parses only the affected packages.
      - If removed: purges the missing entries from the in-memory catalog and manifest.
 4. **Background Rescan Polling**: The frontend and resume handler trigger quick rescans to track drive insertion/ejection automatically.
+5. **Cache Invalidation**: The frontend compares the backend version from `/api/version` with the last version it saw. After an update, it clears the local cache through `/api/cache/clear` and runs a full rescan. A manual cache clear also refreshes the package catalog.
 
 ---
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.2.2
+
+### Package Detection
+- Fixed PS4 base packages being incorrectly identified as DLC
+
+### Cache and Scanning
+- Cache is cleared and the package catalog is rescanned automatically after an app update; clearing the cache manually also refreshes the catalog
+
+---
+
 ## v1.2.1
 
 ### Direct Install
