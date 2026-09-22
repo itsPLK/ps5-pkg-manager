@@ -1,7 +1,7 @@
 #ifndef VERSION_H
 #define VERSION_H
 
-#define PKGMGR_VERSION "1.2.1"
+#define PKGMGR_VERSION "1.2.2"
 
 #ifndef PKGMGR_BUILD_COMMIT
 #define PKGMGR_BUILD_COMMIT "unknown"
