@@ -1,7 +1,7 @@
 /*
  * PKG Manager - Virtual HTTP Range Streaming Server
  *
- * Dedicated raw-socket HTTP server (port 8845) delivering deterministic
+ * Dedicated raw-socket HTTP server (port 18841) delivering deterministic
  * byte-range chunks directly to the PS5 installer subsystem.
  */
 

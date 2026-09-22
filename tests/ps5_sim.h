@@ -3,7 +3,7 @@
  *
  * Models the request pattern that the PlayStation 5 background package
  * installer (libSceAppInstUtil / ShellCore downloader) sends to the PKG
- * Manager virtual stream server (stream_server.c, TCP :8845).
+ * Manager virtual stream server (stream_server.c, TCP :18841).
  *
  * The pattern, reverse-engineered from the captured logs in
  * .for_reference/stream_debug/, has three phases:
@@ -46,7 +46,7 @@
 /* Tunables — all default to values seen in the reference captures. */
 typedef struct {
     const char *host;          /* e.g. "127.0.0.1" or real PS5 IP later      */
-    int         port;          /* e.g. 8845                                   */
+    int         port;          /* e.g. 18841                                   */
     const char *path;          /* /stream/install/package-<ts>-<n>.pkg        */
     const char *content_id;    /* for the .crc sidecar probe; NULL/"" = skip   */
     const char *query;         /* query string; NULL => default                 */

@@ -64,7 +64,7 @@ This compiles and runs tests for:
 ### PS5 Installer Stream Simulator
 
 `test_stream_sim` reproduces the exact HTTP request pattern the PS5 background
-package installer sends to the stream server (`:8845`), so install methods
+package installer sends to the stream server (`:18841`), so install methods
 (websocket client, direct stream creation) can be developed and verified on the
 host without a console. It is modeled from the captures in
 `.for_reference/stream_debug/`: a burst of header re-reads, a `*.crc` sidecar
@@ -74,7 +74,7 @@ probe that must 404, then two parallel bulk connections serving contiguous
 - It is built and run automatically by `make test` (listed in `TESTS`, with
   `tests/ps5_sim.c` in `TEST_SRCS`).
 - `tools/ps5_installer_sim.c` is the standalone CLI half — it can point the
-  same replay at any live server (`--no-server --port 8845`), or be fully
+  same replay at any live server (`--no-server --port 18841`), or be fully
   self-contained: build a fixture PKG, start a local stream server, replay the
   PS5 pattern, and print a reference-format replay log.
 - `tools/run_stream_sim.sh` builds and runs the CLI:
@@ -92,7 +92,7 @@ is stored on disk. Install can start as soon as the header is parsed,
 while the rest still uploads:
 
 - Transport: `src/ws_upload.c` (`include/ws_upload.h`) — RFC6455 listener
-  on `:8846`, in-order chunks with resume. Narrow REST hook in
+  on `:18842`, in-order chunks with resume. Narrow REST hook in
   `src/http_server.c` (`POST /api/upload/init|finish|cancel`,
   `GET /api/upload/status`); chunk bytes never go through MHD.
 - Live session: `src/ws_stream.c` (`include/ws_stream.h`) — 1 MB pinned
@@ -115,11 +115,11 @@ while the rest still uploads:
   ```bash
   tools/run_direct_install_sim.sh --demo                # concurrent push+pull
   tools/run_direct_install_sim.sh --demo --resume-test  # drop + resume
-  tools/run_direct_install_sim.sh --pkg game.pkg --port 8846  # live server
+  tools/run_direct_install_sim.sh --pkg game.pkg --port 18842  # live server
   ```
 
 - Frontend mock: `node frontend/mock-server.js` serves the same REST shape
-  plus a memory-backed mock WS listener on `:8846`.
+  plus a memory-backed mock WS listener on `:18842`.
 
 ## Automated Deploy
 

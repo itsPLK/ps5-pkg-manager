@@ -192,7 +192,7 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
      * Narrow guarded branch: only URLs under /api/upload/ are handled here.
      * With no browser calling these routes, control falls through to the
      * untouched logic below. Chunk bytes travel over the WS listener
-     * (:8846, ws_upload.c), never through MHD/Post bodies. */
+     * (:18842, ws_upload.c), never through MHD/Post bodies. */
     if (strncmp(url, "/api/upload/", 12) == 0) {
         if (strcmp(method, "POST") == 0 && strcmp(url, "/api/upload/icon") == 0) {
             post_state_t *ps = (post_state_t *)*con_cls;
@@ -292,7 +292,7 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                 } else {
                     ws_direct_set_metadata(owner, sid, title, title_id, version, kind);
                     /* The spool session exists but chunk bytes travel over
-                     * the :8846 listener: refuse loudly if it is down instead
+                     * the :18842 listener: refuse loudly if it is down instead
                      * of letting the browser time out against a dead port. */
                     if (!ws_direct_listener_running()) {
                         ws_direct_cancel_session();

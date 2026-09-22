@@ -4,12 +4,12 @@
 #
 # Compiles tools/ps5_installer_sim.c (the PS5 request-pattern client half,
 # paired against the real stream_server.c) and runs it. Without arguments it
-# builds a small fixture PKG, starts a local stream server on :8845, replays
+# builds a small fixture PKG, starts a local stream server on :18841, replays
 # the PS5 install pattern, prints a reference-format replay log, and stops.
 #
 # Pass any options through to the simulator, e.g.:
 #   tools/run_stream_sim.sh --demo
-#   tools/run_stream_sim.sh --no-server --port 8845
+#   tools/run_stream_sim.sh --no-server --port 18841
 #   tools/run_stream_sim.sh --parallel 2 --header-repeats 5 --size 104857600
 #
 set -e

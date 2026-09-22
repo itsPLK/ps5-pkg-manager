@@ -547,7 +547,7 @@ let installerStatus = {
 let installInterval = null;
 
 // Direct-install mock session (memory-backed like the device RAM ring).
-const WS_MOCK_PORT = 8846;
+const WS_MOCK_PORT = 18842;
 const mockUpload = { active: false, id: '', owner: '', filename: '', total: 0, received: 0, buf: null, icon: null };
 
 function setCors(res) {
@@ -896,7 +896,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && pathname === '/api/log') {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('[PKG Manager Daemon Mock Log]\n[SCANNER] Scanned 14 packages across 4 sources\n[STREAM] Ready on port 8845\n');
+    res.end('[PKG Manager Daemon Mock Log]\n[SCANNER] Scanned 14 packages across 4 sources\n[STREAM] Ready on port 18841\n');
     return;
   }
 
@@ -1074,7 +1074,7 @@ const server = http.createServer(async (req, res) => {
   res.end(JSON.stringify({ error: 'Not found' }));
 });
 
-// Mock WS listener on :8846 (mirrors ws_upload.c framing: masked client
+// Mock WS listener on :18842 (mirrors ws_upload.c framing: masked client
 // frames, unmasked text acks, in-order binary chunks at mockUpload.received).
 function wsSendText(sock, obj) {
   const payload = Buffer.from(JSON.stringify(obj));
@@ -1093,7 +1093,7 @@ wsMock.on('upgrade', mockWsUpgrade);
 wsMock.listen(WS_MOCK_PORT, '0.0.0.0');
 
 function mockWsUpgrade(req, sock) {
-  const url = new URL(req.url, 'http://127.0.0.1:8846');
+  const url = new URL(req.url, 'http://127.0.0.1:18842');
   const key = req.headers['sec-websocket-key'];
   const okWs = (req.headers.upgrade || '').toLowerCase() === 'websocket';
   if (url.pathname !== '/ws/upload' || !okWs || !key) {

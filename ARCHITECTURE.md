@@ -33,9 +33,9 @@ flowchart TB
         end
     end
 
-    subgraph STRM ["Virtual Streaming Pipeline (Port 8845)"]
+    subgraph STRM ["Virtual Streaming Pipeline (Port 18841)"]
         direction LR
-        SOCKET["<b>HTTP Range Server</b> (:8845)<br/><code>stream_server.c</code> (Raw BSD Sockets)"]
+        SOCKET["<b>HTTP Range Server</b> (:18841)<br/><code>stream_server.c</code> (Raw BSD Sockets)"]
         VSTREAM["<b>Virtual Stream Engine</b><br/><code>multipart.c</code> (Multi-part Slices & SMB)"]
     end
 
@@ -93,7 +93,7 @@ The daemon operates **two distinct HTTP servers** on separate TCP ports to isola
 | Port | Implementation | Primary Role | Features |
 |:---|:---|:---|:---|
 | **8844** | `libmicrohttpd` (MHD) | UI & REST API | Serves bundled React SPA, handles JSON REST endpoints, and serves cached package icons. |
-| **8845** | Raw BSD Sockets (`stream_server.c`) | Virtual Stream Pipeline | Serves HTTP/1.1 206 Partial Content byte ranges directly to the PS5 background installer with custom socket timeouts and `MSG_NOSIGNAL` sends. |
+| **18841** | Raw BSD Sockets (`stream_server.c`) | Virtual Stream Pipeline | Serves HTTP/1.1 206 Partial Content byte ranges directly to the PS5 background installer with custom socket timeouts and `MSG_NOSIGNAL` sends. |
 
 ### REST API Endpoints (Port 8844)
 
@@ -106,10 +106,10 @@ The primary web server handles all interactive user requests:
 - **SMB & Metadata Cache**: `/api/smb/test`, `/api/cache/stats`, `/api/cache/clear`.
 - **Leftovers Cleanup**: `/api/leftovers` (scans unlinked patches/DLCs), `/api/leftovers/delete` (purges selected orphans).
 
-### Range Streaming Server (Port 8845)
+### Range Streaming Server (Port 18841)
 
 The dedicated stream server (`stream_server.c`) handles package delivery to the PS5 background installer:
-- Listens on raw BSD sockets at port 8845.
+- Listens on raw BSD sockets at port 18841.
 - Serves HTTP/1.1 `206 Partial Content` (and `HEAD`) responses directly via the virtual stream engine (`virtual_stream_read()`).
 - Uses socket timeouts (`SO_RCVTIMEO`/`SO_SNDTIMEO`) and `MSG_NOSIGNAL` to handle client disconnects cleanly without process interruption.
 - Session name pinning: each installation pins an exact session filename (e.g. `package-<unixtime>-<seq>.pkg`). Any stray or unexpected requests immediately return `404 Not Found`.
@@ -119,10 +119,10 @@ The dedicated stream server (`stream_server.c`) handles package delivery to the 
 
 ## 3. Storage Model & Virtual Range Streaming
 
-Instead of copying package files to the console's internal storage before installing, PKG Manager exposes packages via a virtual HTTP range-streaming endpoint on port 8845:
+Instead of copying package files to the console's internal storage before installing, PKG Manager exposes packages via a virtual HTTP range-streaming endpoint on port 18841:
 
 ```text
-http://127.0.0.1:8845/stream/install/package-<unixtime>-<seq>.pkg
+http://127.0.0.1:18841/stream/install/package-<unixtime>-<seq>.pkg
 ```
 
 ### Key Advantages
@@ -231,7 +231,7 @@ int sceAppInstUtilGetInstallStatus(const char* content_id, SceAppInstallStatusIn
 ### Package Metadata & Installation Pipeline
 
 When invoking `sceAppInstUtilInstallByPackage`, `pkg_metadata_t` is populated as follows:
-- **`uri`**: Unique per-install streaming URL (`http://127.0.0.1:8845/stream/install/package-<unixtime>-<seq>.pkg`). Timestamping prevents URI collisions across successive installations.
+- **`uri`**: Unique per-install streaming URL (`http://127.0.0.1:18841/stream/install/package-<unixtime>-<seq>.pkg`). Timestamping prevents URI collisions across successive installations.
 - **`content_name`**: Formatted as `"<Title ID> (<Kind>)"` (e.g. `"CUSA00000 (Base)"` or `"CUSA00000 (Update)"`).
 - **`content_id`**: Passed as an empty string `""`; the system installer reads the initial package header from the stream to populate `pkg_info.content_id`.
 - **`ex_uri`**, **`playgo_scenario_id`**, **`icon_url`**: Passed as empty strings `""`.
@@ -252,7 +252,7 @@ the host. The pattern, reverse-engineered from the captures in
    16 MiB byte-ranges across `[65536, end)` in an A/B ping-pong.
 
 Every request carries the query the console appends
-(`?product=0287&serverIpAddr=127.0.0.1&r=00000000`) against `:8845`.
+(`?product=0287&serverIpAddr=127.0.0.1&r=00000000`) against `:18841`.
 
 The pure client half is `tests/ps5_sim.c` (raw HTTP/1.1, no dependency on the
 server). `tests/test_stream_sim.c` pairs it against the real
@@ -267,8 +267,8 @@ makes the exact body read block on bytes the server already sent.
 ### Direct-Install Upload Path
 
 ```
-LAN browser (DirectInstallView) --ws://:8846--> ws_upload.c --RAM ring-->
-virtual_stream ("live:<id>") --:8845--> installer.c (existing worker) --> system installer
+LAN browser (DirectInstallView) --ws://:18842--> ws_upload.c --RAM ring-->
+virtual_stream ("live:<id>") --:18841--> installer.c (existing worker) --> system installer
 ```
 
 `src/ws_upload.c` is transport only; `src/ws_stream.c` owns the bytes

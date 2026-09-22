@@ -8,7 +8,7 @@
  * stored on disk: bytes live in the ws_stream ring (RAM) between writer
  * and readers. See include/ws_stream.h.
  *
- * Transport + protocol live here (handshake, framing, listener on :8846,
+ * Transport + protocol live here (handshake, framing, listener on :18842,
  * REST session ops); all byte storage lives in ws_stream.c.
  *
  * Design rules:
@@ -37,7 +37,7 @@
 extern "C" {
 #endif
 
-#define WS_DIRECT_DEFAULT_PORT 8846
+#define WS_DIRECT_DEFAULT_PORT 18842
 #define WS_DIRECT_CHUNK_DEFAULT (1024 * 1024)
 #define WS_DIRECT_SESSION_ID_MAX 64
 #define WS_DIRECT_FILENAME_MAX 256

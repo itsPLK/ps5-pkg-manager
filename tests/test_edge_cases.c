@@ -537,7 +537,7 @@ static void test_stream_server_http(void) {
     assert(sock >= 0);
 
     const char *req1 = "GET /stream/install/package-test.pkg HTTP/1.1\r\n"
-                       "Host: 127.0.0.1:8845\r\n"
+                       "Host: 127.0.0.1:18841\r\n"
                        "Range: bytes=0-15\r\n"
                        "Connection: keep-alive\r\n\r\n";
     assert(send(sock, req1, strlen(req1), 0) == (ssize_t)strlen(req1));
@@ -569,7 +569,7 @@ static void test_stream_server_http(void) {
 
     /* Second request on same socket (pipelined keep-alive) */
     const char *req2 = "GET /stream/install/package-test.pkg HTTP/1.1\r\n"
-                       "Host: 127.0.0.1:8845\r\n"
+                       "Host: 127.0.0.1:18841\r\n"
                        "Range: bytes=16-31\r\n"
                        "Connection: close\r\n\r\n";
     assert(send(sock, req2, strlen(req2), 0) == (ssize_t)strlen(req2));
@@ -602,7 +602,7 @@ static void test_stream_server_http(void) {
     sock = tcp_connect_stream_server();
     assert(sock >= 0);
     const char *req_sc = "GET /stream/install/PPSA90099.crc HTTP/1.1\r\n"
-                         "Host: 127.0.0.1:8845\r\n"
+                         "Host: 127.0.0.1:18841\r\n"
                          "Connection: close\r\n\r\n";
     assert(send(sock, req_sc, strlen(req_sc), 0) == (ssize_t)strlen(req_sc));
     char buf_sc[1024] = {0};
@@ -616,7 +616,7 @@ static void test_stream_server_http(void) {
     sock = tcp_connect_stream_server();
     assert(sock >= 0);
     const char *req_head = "HEAD /stream/install/package-test.pkg HTTP/1.1\r\n"
-                          "Host: 127.0.0.1:8845\r\n"
+                          "Host: 127.0.0.1:18841\r\n"
                           "Range: bytes=0-15\r\n"
                           "Connection: close\r\n\r\n";
     assert(send(sock, req_head, strlen(req_head), 0) == (ssize_t)strlen(req_head));
@@ -633,7 +633,7 @@ static void test_stream_server_http(void) {
     sock = tcp_connect_stream_server();
     assert(sock >= 0);
     const char *req_416 = "GET /stream/install/package-test.pkg HTTP/1.1\r\n"
-                          "Host: 127.0.0.1:8845\r\n"
+                          "Host: 127.0.0.1:18841\r\n"
                           "Range: bytes=999999999-999999999\r\n"
                           "Connection: close\r\n\r\n";
     assert(send(sock, req_416, strlen(req_416), 0) == (ssize_t)strlen(req_416));
@@ -677,7 +677,7 @@ static void test_stream_debug_logging(void) {
     int sock1 = tcp_connect_stream_server();
     assert(sock1 >= 0);
     const char *req1 = "GET /stream/install/package-dbg.pkg HTTP/1.1\r\n"
-                       "Host: 127.0.0.1:8845\r\n"
+                       "Host: 127.0.0.1:18841\r\n"
                        "Range: bytes=0-31\r\n"
                        "Connection: close\r\n\r\n";
     assert(send(sock1, req1, strlen(req1), 0) == (ssize_t)strlen(req1));
@@ -691,7 +691,7 @@ static void test_stream_debug_logging(void) {
     int sock2 = tcp_connect_stream_server();
     assert(sock2 >= 0);
     const char *req2 = "GET /stream/install/package-dbg.pkg HTTP/1.1\r\n"
-                       "Host: 127.0.0.1:8845\r\n"
+                       "Host: 127.0.0.1:18841\r\n"
                        "Range: bytes=100-199\r\n"
                        "Connection: close\r\n\r\n";
     assert(send(sock2, req2, strlen(req2), 0) == (ssize_t)strlen(req2));
@@ -705,7 +705,7 @@ static void test_stream_debug_logging(void) {
     int sock3 = tcp_connect_stream_server();
     assert(sock3 >= 0);
     const char *req3 = "GET /stream/install/other-name.pkg HTTP/1.1\r\n"
-                       "Host: 127.0.0.1:8845\r\n"
+                       "Host: 127.0.0.1:18841\r\n"
                        "Connection: close\r\n\r\n";
     assert(send(sock3, req3, strlen(req3), 0) == (ssize_t)strlen(req3));
     char buf3[512] = {0};

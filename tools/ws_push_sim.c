@@ -4,7 +4,7 @@
  * init, fragmented binary, finish). Two modes:
  *
  *   1. Against a live server (C daemon or frontend/mock-server.js):
- *        tools/ws_push_sim --pkg game.pkg --host 127.0.0.1 --port 8846
+ *        tools/ws_push_sim --pkg game.pkg --host 127.0.0.1 --port 18842
  *
  *   2. Self-contained --demo: build a fixture PKG, start a live RAM
  *      session + listener + the real stream server on the host, push over

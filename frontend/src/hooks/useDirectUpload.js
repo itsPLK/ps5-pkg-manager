@@ -477,7 +477,7 @@ export function useDirectUpload(tabId) {
       }
       if (init.session_id) pollHeader(init.session_id, file.size);
 
-      ws = new WebSocket(wsUploadUrl(init.ws_port || 8846));
+      ws = new WebSocket(wsUploadUrl(init.ws_port || 18842));
       wsRef.current = ws;
       await new Promise(function (resolve, reject) {
         ws.onopen = resolve;

@@ -5,7 +5,7 @@
  * stream server. Used two ways:
  *
  *   1. Standalone against an already-running server on the host:
- *        tools/ps5_installer_sim --no-server --host 127.0.0.1 --port 8845
+ *        tools/ps5_installer_sim --no-server --host 127.0.0.1 --port 18841
  *
  *   2. Self-contained: build a fixture PKG, start the real stream_server.c on
  *      the host, replay the PS5 pattern, and print a reference-format replay

@@ -10,7 +10,7 @@
 # Pass options through to the simulator, e.g.:
 #   tools/run_direct_install_sim.sh --demo
 #   tools/run_direct_install_sim.sh --demo --resume-test
-#   tools/run_direct_install_sim.sh --pkg game.pkg --host 127.0.0.1 --port 8846
+#   tools/run_direct_install_sim.sh --pkg game.pkg --host 127.0.0.1 --port 18842
 #
 set -e
 

@@ -52,7 +52,7 @@ static void fetch_range(uint64_t start, uint64_t end, uint8_t *out, size_t len) 
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
-    assert(getaddrinfo("127.0.0.1", "8845", &hints, &res) == 0);
+    assert(getaddrinfo("127.0.0.1", "18841", &hints, &res) == 0);
     int fd = -1;
     for (struct addrinfo *rp = res; rp; rp = rp->ai_next) {
         fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);

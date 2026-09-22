@@ -9,7 +9,7 @@ extern "C" {
  * Serves byte ranges of single/multi-part packages with hand-built
  * responses (no libmicrohttpd in this path).
  */
-#define STREAM_SERVER_PORT 8845
+#define STREAM_SERVER_PORT 18841
 
 /* Opens the virtual stream for pkg_path and starts listening.
  * Returns 0 on success, negative on failure. */
