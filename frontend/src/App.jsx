@@ -763,10 +763,7 @@ export default function App() {
     return <LoadingScreen />;
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // VIEW A: Full-Screen Waiting For Disc / USB Part Overlay
-  // Completely hides background to prevent gamepad focus on elements underneath
-  // ──────────────────────────────────────────────────────────────────────────
+  // Waiting for a disc or USB package part.
   if (isWaitingForPart) {
     return <WaitingForPartScreen
       installerStatus={installerStatus}
@@ -775,10 +772,7 @@ export default function App() {
     />;
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // VIEW B: Full-Screen Active Installation Overlay
-  // Completely hides background to prevent gamepad focus on elements underneath
-  // ──────────────────────────────────────────────────────────────────────────
+  // Active installation overlay.
   if (isInstalling) {
     return <InstallingScreen
       installerStatus={installerStatus}
@@ -795,17 +789,12 @@ export default function App() {
     />;
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // VIEW C: Full-Screen Refresh / Scan Progress Overlay
-  // Completely hides background to prevent gamepad focus on elements underneath
-  // ──────────────────────────────────────────────────────────────────────────
+  // Refresh and scan progress overlay.
   if (refreshing || scanStatus.is_scanning) {
     return <ScanningScreen scanStatus={scanStatus} />;
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // MAIN VIEW (Drives, Package Grid, or Title Detail View)
-  // ──────────────────────────────────────────────────────────────────────────
+  // Main application view.
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white flex flex-col font-ps5">
       <Toast notification={notification} />

@@ -19,10 +19,7 @@
 #include "leftovers.h"
 #include "app_diag.h"
 #include "app_installer.h"
-#include "ws_upload.h" /* NEW: direct-install upload sessions (PLAN.md). The
-                        * hook below is the ONLY touch point: guarded REST
-                        * routes, off unless a browser explicitly calls them.
-                        * No existing route or init order is changed. */
+#include "ws_upload.h"
 #include "ws_stream.h"
 
 #include <stdio.h>
@@ -191,7 +188,7 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         }
     }
 
-    /* ── Direct-install upload sessions (NEW, PLAN.md) ───────────────
+    /* ── Direct-install upload sessions ──────────────────────────────
      * Narrow guarded branch: only URLs under /api/upload/ are handled here.
      * With no browser calling these routes, control falls through to the
      * untouched logic below. Chunk bytes travel over the WS listener

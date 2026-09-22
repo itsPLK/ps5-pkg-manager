@@ -24,8 +24,7 @@ SRCS := src/main.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c src/smb_cl
         src/http_server.c src/stream_server.c src/stream_debug_log.c src/notification.c \
         src/multipart.c src/miniz.c src/app_info.c src/sqlite3.c src/icon_blurhash.c src/leftovers.c src/app_diag.c \
         src/app_installer.c
-# NEW isolated module: direct-install WS upload (PLAN.md). Additive only;
-# existing SRCS/CFLAGS/LIBS lines above are untouched.
+# Direct-install WebSocket upload modules.
 SRCS_WS := src/ws_upload.c src/ws_stream.c
 OBJS := $(SRCS:.c=.o)
 ELF  := pkgmgr.elf

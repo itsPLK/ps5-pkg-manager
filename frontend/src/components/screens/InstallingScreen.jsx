@@ -132,6 +132,3 @@ const isBatch = !!(batchInstall && batchInstall.combinedTotal > 0);
       </div>
     );
   }
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // VIEW C: Full-Screen Refresh

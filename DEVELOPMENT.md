@@ -84,7 +84,7 @@ probe that must 404, then two parallel bulk connections serving contiguous
   tools/run_stream_sim.sh --no-server     # replay against an existing server
   ```
 
-### Direct Install over WebSocket (PLAN.md)
+### Direct Install over WebSocket
 
 The Direct Install page lets a LAN browser push a local `.pkg` to the
 daemon, which streams it straight into the installer from RAM — nothing

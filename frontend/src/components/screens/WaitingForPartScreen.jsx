@@ -68,6 +68,3 @@ const discTitle = isDiscSource
       </div>
     );
   }
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // VIEW B: Full-Screen Active Installation

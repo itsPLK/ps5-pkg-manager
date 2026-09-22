@@ -174,7 +174,7 @@ static void test_gap_write_advances_after_far_seek(void) {
            (unsigned long long)g_seeks[0]);
 }
 
-/* Console-geometry front pivot (WS.md §5): 90 segs / 64 slots. Pre-fill
+/* Console-geometry front pivot: 90 segs / 64 slots. Pre-fill
  * 0..63, stream the tail 64..89 through (evicting the front exactly like
  * the production tail bulk), then a parked front read must be serveable
  * at once. Under far-only eviction the waited write for seg 1 wedged the

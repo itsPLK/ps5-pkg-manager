@@ -264,7 +264,7 @@ install method needs. A correct HTTP/1.1 keep-alive reader is essential here:
 absorbing body bytes into the header buffer desyncs a persistent connection and
 makes the exact body read block on bytes the server already sent.
 
-### Direct-Install Upload Path (implemented, see PLAN.md)
+### Direct-Install Upload Path
 
 ```
 LAN browser (DirectInstallView) --ws://:8846--> ws_upload.c --RAM ring-->

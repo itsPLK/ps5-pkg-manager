@@ -192,7 +192,7 @@ static void *browser_thread(void *arg) {
         if (op) cursor = strtoull(op + 9, NULL, 10) / SEG;
     }
     /* FIFO seek queue (deduped): two parallel installer workers can park
-     * at once -- a scalar detour would drop one of them (WS.md §5). */
+     * at once -- a scalar detour would drop one of them. */
     long detour_q[16];
     int detour_n = 0;
     uint64_t acked_n = 0;
@@ -348,7 +348,7 @@ static void *minecraft_pull_thread(void *arg) {
 
 /* ---------- console-geometry pull: tail-first parallel bulk, front pivot ----------
  *
- * Replays the production 89.5 MB capture (WS.md §4): header probes, far
+ * Replays the production 89.5 MB access pattern: header probes, far
  * probe of seg 56, two parallel tail-bulk workers (segs 56-74 / 74-89),
  * then a front pivot (segs 0-18 / 18-36). The tail bulk evicts the front
  * through far eviction; the pivot must be served through resends. */
@@ -527,8 +527,8 @@ int main(void) {
         printf("  minecraft-jump ok\n");
     }
 
-    /* Scenario 3b: console-geometry parallel pivot (WS.md §4-5, fix plan
-     * §9.5). 90 segs / default 64 slots, two parallel phased readers:
+    /* Scenario 3b: console-geometry parallel pivot. 90 segs / default 64
+     * slots, two parallel phased readers:
      * tail bulk (56-74 / 74-89) then front pivot (0-18 / 18-36). The tail
      * bulk evicts the front; the pivot must be served through resends
      * while the socket stays responsive (no wedge, no idle kill). */

@@ -255,12 +255,9 @@ export function useDirectUpload(tabId) {
     installStartedRef.current = false;
     const SEG = 1024 * 1024;
     const NSEGS = Math.max(1, Math.ceil(file.size / SEG));
-    // Virtual-block-device pusher (WS_fix_plan_2.md): FIFO seek queue
-    // (two parallel installer workers can park at once -- a scalar
-    // detour would drop one), stop-and-wait inflight guard, "busy"
-    // requeue, and demand-paging standby: after the baseline is fully
-    // acked the socket stays open serving seeks until the install
-    // finalizes. Seeks are never dropped; the server re-emits them.
+    // Coordinate the sequential upload with seek requests from installer
+    // workers. Keep one segment in flight, retry busy writes, and leave the
+    // socket open to serve seeks until the installation finalizes.
     const seekQueue = [];
     let inflightSeg = -1;
     let baselineSeg = 0;
