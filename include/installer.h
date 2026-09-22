@@ -38,6 +38,10 @@ extern "C" {
 
 int installer_init(const char *server_url);
 int installer_start(const char *pkg_path);
+/* Start a base package and queue its update in the native installer. The
+ * update is started after the base is fully finalized, even if the browser
+ * closes in the meantime. */
+int installer_start_batch(const char *base_pkg_path, const char *update_pkg_path);
 /* NEW: start from a live RAM session ("live:<id>"); see installer.c. */
 int installer_start_live(const char *live_uri);
 int installer_cancel(void);

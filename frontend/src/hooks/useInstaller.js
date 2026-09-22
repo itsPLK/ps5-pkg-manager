@@ -112,6 +112,22 @@ export function useInstaller(props) {
             shouldRestoreDetailScrollRef.current = true;
           }
         }
+        const currentBatch = batchInstallRef.current;
+        const isBatchUpdate = currentBatch && currentBatch.stage === 'base' &&
+          (data.pkg_path === currentBatch.updatePkg.path || data.pkg_kind === 'update');
+        if (isBatchUpdate && data.is_installing) {
+          const nextBatch = { ...currentBatch, stage: 'update' };
+          try {
+            localStorage.setItem('pkg_batch_install', JSON.stringify(nextBatch));
+          } catch (e) {}
+          setBatchInstall(nextBatch);
+        } else if (isBatchUpdate && !data.is_installing && (data.completed || data.failed)) {
+          /* The page may be reopened after the native batch already
+           * finished, so do not rely on a prior in-page poll transition. */
+          try { localStorage.removeItem('pkg_batch_install'); } catch (e) {}
+          setBatchInstall(null);
+        }
+
         setInstallerStatus(data);
         setInitialStatusLoaded(true);
 
@@ -147,34 +163,13 @@ export function useInstaller(props) {
           }
         }
 
-        const currentBatch = batchInstallRef.current;
-        if (currentBatch) {
-          if (currentBatch.stage === 'base' && wasInstallingRef.current && !data.is_installing && data.completed) {
-            const nextBatch = { ...currentBatch, stage: 'update' };
-            try {
-              localStorage.setItem('pkg_batch_install', JSON.stringify(nextBatch));
-            } catch (e) {}
-            setBatchInstall(nextBatch);
-            if (showToast) showToast(`Base installed! Installing update for ${currentBatch.titleName}...`, 'info');
-
-            installPackage(currentBatch.updatePkg.path).then((resJson) => {
-              if (!resJson || !resJson.success) {
-                if (showToast) showToast(resJson && resJson.error ? resJson.error : 'Failed to start update installation', 'error');
-                try { localStorage.removeItem('pkg_batch_install'); } catch (e) {}
-                setBatchInstall(null);
-              } else {
-                fetchStatus();
-              }
-            }).catch((e) => {
-              if (showToast) showToast('Update install request failed: ' + e.message, 'error');
-              try { localStorage.removeItem('pkg_batch_install'); } catch (e) {}
-              setBatchInstall(null);
-            });
-          } else if (currentBatch.stage === 'update' && wasInstallingRef.current && !data.is_installing && (data.completed || data.failed)) {
+        const currentBatchAfterStatus = batchInstallRef.current;
+        if (currentBatchAfterStatus) {
+          if (currentBatchAfterStatus.stage === 'update' && wasInstallingRef.current && !data.is_installing && (data.completed || data.failed)) {
             try { localStorage.removeItem('pkg_batch_install'); } catch (e) {}
             setBatchInstall(null);
             if (data.completed) {
-              if (showToast) showToast(`Base + Update installed for ${currentBatch.titleName}!`, 'success');
+              if (showToast) showToast(`Base + Update installed for ${currentBatchAfterStatus.titleName}!`, 'success');
             }
           } else if (data.failed && !data.is_installing) {
             try { localStorage.removeItem('pkg_batch_install'); } catch (e) {}
@@ -284,7 +279,7 @@ export function useInstaller(props) {
     if (showToast) showToast(`Starting Base + Update install for ${batch.titleName}...`, 'info');
 
     try {
-      const data = await installPackage(basePkg.path);
+      const data = await installPackage(basePkg.path, updatePkg.path);
       if (!data || !data.success) {
         if (showToast) showToast(data.error || 'Failed to start base installation', 'error');
         try { localStorage.removeItem('pkg_batch_install'); } catch (e) {}

@@ -1016,9 +1016,11 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
     if (strcmp(method, "POST") == 0 && strcmp(url, "/api/install") == 0) {
         post_state_t *ps = (post_state_t *)*con_cls;
         char target_path[512] = {0};
+        char update_path[512] = {0};
 
         if (ps && ps->data) {
             extract_json_string_value(ps->data, "path", target_path, sizeof(target_path));
+            extract_json_string_value(ps->data, "update_path", update_path, sizeof(update_path));
         }
 
         char response_buf[512];
@@ -1056,10 +1058,14 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                 status_code = MHD_HTTP_INTERNAL_SERVER_ERROR;
             }
         } else {
-            int res = installer_start(target_path);
+            int res = update_path[0] != '\0'
+                ? installer_start_batch(target_path, update_path)
+                : installer_start(target_path);
             if (res == 0) {
                 snprintf(response_buf, sizeof(response_buf),
-                         "{\"success\":true,\"message\":\"Installation started successfully\"}");
+                         update_path[0] != '\0'
+                             ? "{\"success\":true,\"message\":\"Base installation started; update queued\"}"
+                             : "{\"success\":true,\"message\":\"Installation started successfully\"}");
             } else if (res == -2) {
                 snprintf(response_buf, sizeof(response_buf),
                          "{\"success\":false,\"error\":\"Another package is currently installing\"}");

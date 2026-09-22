@@ -4,11 +4,11 @@ export async function pollStatus() {
   return res.json();
 }
 
-export async function installPackage(path) {
+export async function installPackage(path, updatePath = '') {
   const res = await fetch('/api/install', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path })
+    body: JSON.stringify(updatePath ? { path, update_path: updatePath } : { path })
   });
   if (!res.ok) throw new Error(`Install failed: ${res.status}`);
   return res.json();

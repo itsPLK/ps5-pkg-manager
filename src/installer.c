@@ -89,6 +89,11 @@ static volatile int g_monitor_thread_created = 0;
 static pthread_t g_stream_thread;
 static volatile int g_stream_thread_created = 0;
 static volatile int g_cancel_stream = 0;
+/* A batch handoff must live in the installer process, not in the browser.
+ * The browser may be closed while the base package is being finalized. */
+static char g_pending_pkg_path[512];
+
+static int installer_start_internal(const char *pkg_path, const char *pending_pkg_path);
 
 static int mkdir_recursive(const char *dir_path) {
     char tmp[512];
@@ -1227,18 +1232,51 @@ static void *stream_installer_worker(void *arg) {
     pthread_mutex_unlock(&g_installer_mutex);
 #endif
 
+    /* Capture a queued second package before releasing the first package's
+     * stream. The next worker must only start after the first worker has
+     * completely stopped using the stream server. */
+    char next_pkg_path[512] = {0};
+    pthread_mutex_lock(&g_installer_mutex);
+    if (g_status.completed && g_pending_pkg_path[0] != '\0' &&
+        g_monitor_running && !g_cancel_stream) {
+        strncpy(next_pkg_path, g_pending_pkg_path, sizeof(next_pkg_path) - 1);
+        next_pkg_path[sizeof(next_pkg_path) - 1] = '\0';
+        g_pending_pkg_path[0] = '\0';
+    } else if (g_status.failed || g_cancel_stream || !g_monitor_running) {
+        g_pending_pkg_path[0] = '\0';
+    }
+    pthread_mutex_unlock(&g_installer_mutex);
+
     /* NEW: release the live RAM session (noop for disk installs). Abort
      * first so any reader blocked in ws_live_read wakes before/during
      * the stop's vs_refs drain; destroy frees the ring. */
     ws_live_abort();
     stream_server_session_stop();
     ws_live_destroy();
+
+    if (next_pkg_path[0] != '\0') {
+        install_log("[INSTALLER] Base completed; starting queued update: %s", next_pkg_path);
+        int next_res = installer_start_internal(next_pkg_path, NULL);
+        if (next_res != 0) {
+            pthread_mutex_lock(&g_installer_mutex);
+            g_status.is_installing = 0;
+            g_status.failed = 1;
+            g_status.error_code = next_res;
+            strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
+            snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                     "Failed to start queued update (code %d)", next_res);
+            pthread_mutex_unlock(&g_installer_mutex);
+            install_log("[INSTALLER] Failed to start queued update (code %d)", next_res);
+            ps5_notify("Failed to start queued update");
+        }
+    }
     return NULL;
 }
 
 int installer_init(const char *server_url) {
     pthread_mutex_lock(&g_installer_mutex);
     memset(&g_status, 0, sizeof(g_status));
+    g_pending_pkg_path[0] = '\0';
     strncpy(g_status.status_str, "idle", sizeof(g_status.status_str) - 1);
     g_status.last_poll_time = time(NULL);
     g_cancel_stream = 0;
@@ -1273,15 +1311,26 @@ int installer_init(const char *server_url) {
     return 0;
 }
 
-int installer_start(const char *pkg_path) {
+static int installer_start_internal(const char *pkg_path, const char *pending_pkg_path) {
     if (!pkg_path || pkg_path[0] == '\0') {
         return -1;
+    }
+
+    char pending_path_copy[512] = {0};
+    if (pending_pkg_path && pending_pkg_path[0] != '\0') {
+        strncpy(pending_path_copy, pending_pkg_path, sizeof(pending_path_copy) - 1);
+        pending_path_copy[sizeof(pending_path_copy) - 1] = '\0';
     }
 
     /* Fast check under lock, then release before slow I/O (parse, statvfs,
      * mkdir) so cancel/status keep working. Re-checked under lock later. */
     pthread_mutex_lock(&g_installer_mutex);
     int already = g_status.is_installing;
+    if (!already) {
+        /* A normal single install also clears a stale batch left by a
+         * failed/canceled worker. A batch commit below replaces it. */
+        g_pending_pkg_path[0] = '\0';
+    }
     pthread_mutex_unlock(&g_installer_mutex);
     if (already) {
         return -2; /* Already installing */
@@ -1294,8 +1343,12 @@ int installer_start(const char *pkg_path) {
     pthread_mutex_lock(&g_installer_mutex);
     if (g_stream_thread_created) {
         old_thr = g_stream_thread;
-        have_old = 1;
         g_stream_thread_created = 0;
+        /* The queued handoff is launched by the finishing worker itself.
+         * Joining that worker here would deadlock. It is already past the
+         * stream cleanup and will return after this function starts the next
+         * worker. */
+        have_old = !pthread_equal(pthread_self(), old_thr);
     }
     pthread_mutex_unlock(&g_installer_mutex);
     if (have_old) {
@@ -1364,6 +1417,12 @@ int installer_start(const char *pkg_path) {
         return -2;
     }
     memset(&g_status, 0, sizeof(g_status));
+    if (pending_path_copy[0] != '\0') {
+        strncpy(g_pending_pkg_path, pending_path_copy, sizeof(g_pending_pkg_path) - 1);
+        g_pending_pkg_path[sizeof(g_pending_pkg_path) - 1] = '\0';
+    } else {
+        g_pending_pkg_path[0] = '\0';
+    }
     g_status.is_installing = 1;
     g_status.is_multipart = detail.is_multipart;
     g_status.total_parts = detail.total_parts;
@@ -1436,6 +1495,18 @@ int installer_start(const char *pkg_path) {
         ps5_notify("Installing %s...", notify_title);
     }
     return 0;
+}
+
+int installer_start(const char *pkg_path) {
+    return installer_start_internal(pkg_path, NULL);
+}
+
+int installer_start_batch(const char *base_pkg_path, const char *update_pkg_path) {
+    if (!base_pkg_path || base_pkg_path[0] == '\0' ||
+        !update_pkg_path || update_pkg_path[0] == '\0') {
+        return -1;
+    }
+    return installer_start_internal(base_pkg_path, update_pkg_path);
 }
 
 /* NEW: start an install from a live RAM session ("live:<id>", Direct
@@ -1600,6 +1671,7 @@ int installer_cancel(void) {
         return -1;
     }
     g_cancel_stream = 1;
+    g_pending_pkg_path[0] = '\0';
     g_status.is_installing = 0;
     g_status.failed = 1;
     strncpy(g_status.status_str, "canceled", sizeof(g_status.status_str) - 1);
@@ -1673,6 +1745,7 @@ char *installer_status_to_json(void) {
     char esc_title_id[64];
     char esc_title_name[512];
     char esc_content_id[128];
+    char esc_pkg_kind[64];
     char esc_status[64];
     char esc_prompt[512];
 
@@ -1680,6 +1753,7 @@ char *installer_status_to_json(void) {
     escape_json_str(g_status.title_id, esc_title_id, sizeof(esc_title_id));
     escape_json_str(g_status.title_name, esc_title_name, sizeof(esc_title_name));
     escape_json_str(g_status.content_id, esc_content_id, sizeof(esc_content_id));
+    escape_json_str(g_status.pkg_kind, esc_pkg_kind, sizeof(esc_pkg_kind));
     escape_json_str(g_status.status_str, esc_status, sizeof(esc_status));
     escape_json_str(g_status.prompt_message, esc_prompt, sizeof(esc_prompt));
 
@@ -1690,6 +1764,7 @@ char *installer_status_to_json(void) {
         "\"title_id\":\"%s\","
         "\"title_name\":\"%s\","
         "\"content_id\":\"%s\","
+        "\"pkg_kind\":\"%s\","
         "\"status\":\"%s\","
         "\"downloaded_bytes\":%llu,"
         "\"total_bytes\":%llu,"
@@ -1708,6 +1783,7 @@ char *installer_status_to_json(void) {
         esc_title_id,
         esc_title_name,
         esc_content_id,
+        esc_pkg_kind,
         esc_status,
         (unsigned long long)g_status.downloaded_bytes,
         (unsigned long long)g_status.total_bytes,
@@ -1729,6 +1805,9 @@ char *installer_status_to_json(void) {
 void installer_shutdown(void) {
     g_cancel_stream = 1;
     g_monitor_running = 0;
+    pthread_mutex_lock(&g_installer_mutex);
+    g_pending_pkg_path[0] = '\0';
+    pthread_mutex_unlock(&g_installer_mutex);
     /* NEW: unblock any live readers so the worker join below can't wedge. */
     ws_live_abort();
     if (g_stream_thread_created) {

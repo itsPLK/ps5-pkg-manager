@@ -66,6 +66,32 @@ int main(void) {
     assert(strstr(active_json, "PPSA90012") != NULL);
     free(active_json);
 
+    /* Test 1b: the native installer owns the base -> update handoff. This
+     * must complete without any status polling or browser-side callback. */
+    assert(fixture_write_ps5_pkg("/tmp/test_installer_fixtures/wc_update.pkg",
+                                 "PPSA90012", "WaveCast", "gp", "01.004.000", 1) == 0);
+    int batch_res = installer_start_batch("/tmp/test_installer_fixtures/wc.pkg",
+                                          "/tmp/test_installer_fixtures/wc_update.pkg");
+    printf("Start native base + update batch result: %d\n", batch_res);
+    assert(batch_res == 0);
+
+    int batch_waited = 0;
+    int update_seen = 0;
+    while (batch_waited < 15000) {
+        installer_get_status(&st);
+        if (strcmp(st.pkg_path, "/tmp/test_installer_fixtures/wc_update.pkg") == 0) {
+            update_seen = 1;
+        }
+        if (update_seen && !st.is_installing && st.completed) break;
+        usleep(100000);
+        batch_waited += 100;
+    }
+    assert(update_seen == 1);
+    assert(st.completed == 1);
+    assert(st.failed == 0);
+    assert(strcmp(st.pkg_path, "/tmp/test_installer_fixtures/wc_update.pkg") == 0);
+    printf("Native base + update batch completed without browser polling\n");
+
     installer_shutdown();
 
     /* Test 2: Monitor passivity: no browser relaunch machinery remains.
