@@ -857,6 +857,86 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // 11b. SMB guided-setup browse APIs (mock fixtures mirror examplePkgs shares)
+  const mockSmbTree = {
+    'Games': {
+      '': [
+        { name: 'PS5', is_dir: true, size: 0, mtime: 1718000000 },
+        { name: 'PS4', is_dir: true, size: 0, mtime: 1716000000 },
+        { name: 'Vespergarde_Skyward_Realms_Base.pkg', is_dir: false, size: 52800000000, mtime: 1714000000 }
+      ],
+      'PS5': [
+        { name: 'RPG', is_dir: true, size: 0, mtime: 1718000000 },
+        { name: 'Action', is_dir: true, size: 0, mtime: 1718100000 }
+      ],
+      'PS5/RPG': [
+        { name: 'Vespergarde_Shards_of_Dawn.pkg', is_dir: false, size: 22400000000, mtime: 1718500000 }
+      ],
+      'PS4': []
+    },
+    'Homebrew': {
+      '': [
+        { name: 'emulators', is_dir: true, size: 0, mtime: 1718500000 },
+        { name: 'PolyArcadia_PS5_v01.180.pkg', is_dir: false, size: 485000000, mtime: 1718500000 }
+      ],
+      'emulators': []
+    },
+    'Media': { '': [] }
+  };
+  if (req.method === 'POST' && pathname === '/api/smb/shares') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      let server = '';
+      try { server = (JSON.parse(body || '{}').server || '').trim(); } catch (e) {}
+      if (!server) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Server address is required' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        shares: [
+          { name: 'Games', remark: 'PS5 packages', type: 0, is_disk: true, is_hidden: false, is_special: false },
+          { name: 'Homebrew', remark: 'Homebrew apps', type: 0, is_disk: true, is_hidden: false, is_special: false },
+          { name: 'Media', remark: '', type: 0, is_disk: true, is_hidden: false, is_special: false }
+        ]
+      }));
+    });
+    return;
+  }
+  if (req.method === 'POST' && pathname === '/api/smb/browse') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      let parsed = {};
+      try { parsed = JSON.parse(body || '{}'); } catch (e) {}
+      const share = (parsed.share || '').trim();
+      const relPath = (parsed.path || '').replace(/^\/+|\/+$/g, '').replace(/\\/g, '/');
+      if (!parsed.server || !share) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Server and share are required' }));
+        return;
+      }
+      const tree = mockSmbTree[share];
+      if (!tree) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: `Share '${share}' not found` }));
+        return;
+      }
+      const entries = tree[relPath];
+      if (!entries) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: `Folder '${relPath || '/'}' not found` }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, share, path: relPath, entries }));
+    });
+    return;
+  }
+
   // 12. Cache, Leftovers, Shortcut, Log APIs
   if (req.method === 'GET' && pathname === '/api/cache/stats') {
     res.writeHead(200, { 'Content-Type': 'application/json' });

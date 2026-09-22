@@ -17,16 +17,31 @@ struct smb2_context {
 
 struct smb2dir {
     DIR *d;
+    char base[1024];
 };
 
+/* NOTE: these must match the real libsmb2 ABI (see
+ * deps/libsmb2/include/smb2/libsmb2.h) because callers are compiled
+ * against the real headers but linked against this mock. */
 struct smb2_stat_64 {
+    uint32_t smb2_type;
+    uint32_t smb2_nlink;
+    uint64_t smb2_ino;
     uint64_t smb2_size;
-    uint32_t smb2_mtime;
-    int smb2_type;
+    uint64_t smb2_atime;
+    uint64_t smb2_atime_nsec;
+    uint64_t smb2_mtime;
+    uint64_t smb2_mtime_nsec;
+    uint64_t smb2_ctime;
+    uint64_t smb2_ctime_nsec;
+    uint64_t smb2_btime;
+    uint64_t smb2_btime_nsec;
+    uint32_t smb2_attributes;
+    uint32_t smb2_reparse_tag;
 };
 
 struct smb2dirent {
-    char name[256];
+    const char *name;
     struct smb2_stat_64 st;
 };
 
@@ -34,8 +49,8 @@ struct smb2fh {
     int fd;
 };
 
-#define SMB2_TYPE_FILE 1
-#define SMB2_TYPE_DIRECTORY 2
+#define SMB2_TYPE_FILE 0
+#define SMB2_TYPE_DIRECTORY 1
 
 struct smb2_context *smb2_init_context(void) {
     struct smb2_context *ctx = (struct smb2_context *)calloc(1, sizeof(struct smb2_context));
@@ -83,6 +98,7 @@ struct smb2dir *smb2_opendir(struct smb2_context *smb2, const char *path) {
         return NULL;
     }
     dir->d = d;
+    strncpy(dir->base, local_path, sizeof(dir->base) - 1);
     return dir;
 }
 
@@ -92,9 +108,25 @@ struct smb2dirent *smb2_readdir(struct smb2_context *smb2, struct smb2dir *dir) 
     struct dirent *de = readdir(dir->d);
     if (!de) return NULL;
     static struct smb2dirent ent;
+    static char name_buf[1024];
     memset(&ent, 0, sizeof(ent));
-    strncpy(ent.name, de->d_name, sizeof(ent.name) - 1);
-    ent.st.smb2_type = (de->d_type == DT_DIR) ? SMB2_TYPE_DIRECTORY : SMB2_TYPE_FILE;
+    strncpy(name_buf, de->d_name, sizeof(name_buf) - 1);
+    name_buf[sizeof(name_buf) - 1] = '\0';
+    ent.name = name_buf;
+    if (de->d_type == DT_DIR) {
+        ent.st.smb2_type = SMB2_TYPE_DIRECTORY;
+    } else if (de->d_type == DT_UNKNOWN || de->d_type == DT_LNK) {
+        char full[2048];
+        snprintf(full, sizeof(full), "%s/%s", dir->base, de->d_name);
+        struct stat s;
+        if (stat(full, &s) == 0 && S_ISDIR(s.st_mode)) {
+            ent.st.smb2_type = SMB2_TYPE_DIRECTORY;
+        } else {
+            ent.st.smb2_type = SMB2_TYPE_FILE;
+        }
+    } else {
+        ent.st.smb2_type = SMB2_TYPE_FILE;
+    }
     return &ent;
 }
 
@@ -212,5 +244,20 @@ int smb2_pread_async(struct smb2_context *smb2, struct smb2fh *fh,
     if (cb) {
         cb(smb2, (int)n, NULL, cb_data);
     }
+    return 0;
+}
+
+/* Stubs for guided-setup browse APIs (host tests use mock transport). */
+void *smb2_share_enum_sync(void *smb2, int level) {
+    (void)smb2; (void)level;
+    return NULL;
+}
+
+void smb2_free_data(void *smb2, void *ptr) {
+    (void)smb2; (void)ptr;
+}
+
+int smb2_disconnect_share(void *smb2) {
+    (void)smb2;
     return 0;
 }

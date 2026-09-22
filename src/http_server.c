@@ -132,6 +132,98 @@ static void json_str_esc(const char *src, char *dst, size_t dst_sz) {
     dst[d] = '\0';
 }
 
+/* Parse a single SMB config from a POST body. Unlike pkg_cache_parse_smb_shares
+ * (which drops entries without a share), this also accepts server-only bodies
+ * needed for share enumeration. */
+static void smb_cfg_from_body(const char *body, smb_share_config_t *cfg) {
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->port = SMB_DEFAULT_PORT;
+    cfg->enabled = 1;
+    if (!body || !*body) return;
+
+    smb_share_config_t parsed[1];
+    int count = 0;
+    if (strstr(body, "\"smb_shares\"")) {
+        pkg_cache_parse_smb_shares(body, parsed, &count);
+    } else {
+        char *wrap_buf = (char *)malloc(strlen(body) + 64);
+        if (wrap_buf) {
+            sprintf(wrap_buf, "{\"smb_shares\":[%s]}", body);
+            pkg_cache_parse_smb_shares(wrap_buf, parsed, &count);
+            free(wrap_buf);
+        }
+    }
+    if (count > 0) {
+        memcpy(cfg, &parsed[0], sizeof(*cfg));
+        return;
+    }
+
+    /* Fallback: server-only or otherwise incomplete config (share enum). */
+    extract_json_string_value(body, "id", cfg->id, sizeof(cfg->id));
+    extract_json_string_value(body, "label", cfg->label, sizeof(cfg->label));
+    extract_json_string_value(body, "server", cfg->server, sizeof(cfg->server));
+    extract_json_string_value(body, "share", cfg->share, sizeof(cfg->share));
+    extract_json_string_value(body, "path", cfg->path, sizeof(cfg->path));
+    extract_json_string_value(body, "username", cfg->username, sizeof(cfg->username));
+    extract_json_string_value(body, "password", cfg->password, sizeof(cfg->password));
+    extract_json_string_value(body, "workgroup", cfg->workgroup, sizeof(cfg->workgroup));
+    const char *pp = strstr(body, "\"port\"");
+    if (pp) {
+        pp = strchr(pp + 6, ':');
+        if (pp) {
+            pp++;
+            while (*pp == ' ' || *pp == '\t' || *pp == '"') pp++;
+            int p = atoi(pp);
+            if (p > 0) cfg->port = p;
+        }
+    }
+    /* Allow explicit browse targets: "browse_path" / "subpath" override "path". */
+    char browse_override[256] = {0};
+    if (extract_json_string_value(body, "browse_path", browse_override, sizeof(browse_override)) == 0 && browse_override[0]) {
+        strncpy(cfg->path, browse_override, sizeof(cfg->path) - 1);
+    } else if (extract_json_string_value(body, "subpath", browse_override, sizeof(browse_override)) == 0 && browse_override[0]) {
+        strncpy(cfg->path, browse_override, sizeof(cfg->path) - 1);
+    }
+}
+
+/* Fill in a blank password/workgroup from saved settings for the same
+ * server+share+username (or matching id). GET /api/settings masks passwords,
+ * so edit/browse flows resend a blank password that must resolve to the
+ * stored one — otherwise the server sees a guest logon and answers
+ * STATUS_ACCESS_DENIED (0xC0000022). Same idea as POST /api/smb/test. */
+static void smb_inherit_saved_credentials(smb_share_config_t *cfg) {
+    if (!cfg) return;
+    if (cfg->password[0] != '\0' && cfg->workgroup[0] != '\0') return;
+    app_settings_t saved;
+    pkg_cache_get_settings(&saved);
+    for (int j = 0; j < saved.smb_share_count; j++) {
+        smb_share_config_t saved_cfg = saved.smb_shares[j];
+        smb_client_sanitize_config(&saved_cfg);
+        int same = 0;
+        if (cfg->id[0] != '\0' && saved_cfg.id[0] != '\0' &&
+            strcmp(cfg->id, saved_cfg.id) == 0) {
+            same = 1;
+        } else if (saved_cfg.server[0] != '\0' &&
+                   strcasecmp(cfg->server, saved_cfg.server) == 0 &&
+                   strcasecmp(cfg->username, saved_cfg.username) == 0 &&
+                   (cfg->share[0] == '\0' || saved_cfg.share[0] == '\0' ||
+                    strcasecmp(cfg->share, saved_cfg.share) == 0)) {
+            same = 1;
+        }
+        if (same) {
+            if (cfg->password[0] == '\0' && saved.smb_shares[j].password[0] != '\0') {
+                strncpy(cfg->password, saved.smb_shares[j].password, sizeof(cfg->password) - 1);
+                cfg->password[sizeof(cfg->password) - 1] = '\0';
+            }
+            if (cfg->workgroup[0] == '\0' && saved.smb_shares[j].workgroup[0] != '\0') {
+                strncpy(cfg->workgroup, saved.smb_shares[j].workgroup, sizeof(cfg->workgroup) - 1);
+                cfg->workgroup[sizeof(cfg->workgroup) - 1] = '\0';
+            }
+            break;
+        }
+    }
+}
+
 static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                                       const char *url, const char *method,
                                       const char *version, const char *upload_data,
@@ -941,6 +1033,166 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
 
         struct MHD_Response *resp = MHD_create_response_from_buffer(
             strlen(resp_json), (void *)resp_json, MHD_RESPMEM_MUST_COPY);
+        add_cors_headers(resp);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_OK, resp);
+        MHD_destroy_response(resp);
+        return ret;
+    }
+
+    /* ── POST /api/smb/shares: enumerate shares on a server ─────────
+     * Body: {server, port?, username?, password?, workgroup?}
+     * No share/path needed — this is step 1 of guided setup. */
+    if (strcmp(method, "POST") == 0 && strcmp(url, "/api/smb/shares") == 0) {
+        post_state_t *ps = (post_state_t *)*con_cls;
+        smb_share_config_t cfg;
+        smb_cfg_from_body(ps && ps->data ? ps->data : "", &cfg);
+        smb_client_sanitize_config(&cfg);
+        smb_inherit_saved_credentials(&cfg);
+
+        if (cfg.server[0] == '\0') {
+            static const char bad[] = "{\"success\":false,\"error\":\"Server address is required\"}";
+            struct MHD_Response *resp = MHD_create_response_from_buffer(
+                sizeof(bad) - 1, (void *)bad, MHD_RESPMEM_PERSISTENT);
+            add_cors_headers(resp);
+            MHD_add_response_header(resp, "Content-Type", "application/json");
+            enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_OK, resp);
+            MHD_destroy_response(resp);
+            return ret;
+        }
+
+        install_log("[HTTP] POST /api/smb/shares: enumerating shares on host='%s', user='%s'",
+                    cfg.server, cfg.username[0] ? cfg.username : "(guest)");
+
+        smb_share_info_t shares[MAX_SMB_BROWSE_SHARES];
+        char err_buf[512] = {0};
+        int n = smb_client_list_shares(&cfg, shares, MAX_SMB_BROWSE_SHARES,
+                                       err_buf, sizeof(err_buf));
+
+        char *resp_json = (char *)malloc(RESPONSE_BUFFER_SIZE);
+        if (!resp_json) {
+            static const char oom[] = "{\"success\":false,\"error\":\"Out of memory\"}";
+            struct MHD_Response *resp = MHD_create_response_from_buffer(
+                sizeof(oom) - 1, (void *)oom, MHD_RESPMEM_PERSISTENT);
+            add_cors_headers(resp);
+            MHD_add_response_header(resp, "Content-Type", "application/json");
+            enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, resp);
+            MHD_destroy_response(resp);
+            return ret;
+        }
+
+        if (n < 0) {
+            char esc[1024] = {0};
+            json_str_esc(err_buf[0] ? err_buf : "Share enumeration failed", esc, sizeof(esc));
+            snprintf(resp_json, RESPONSE_BUFFER_SIZE,
+                     "{\"success\":false,\"error\":\"%s\"}", esc);
+            install_log("[HTTP] POST /api/smb/shares: failed for host='%s': %s",
+                        cfg.server, err_buf);
+        } else {
+            size_t off = 0;
+            off += snprintf(resp_json + off, RESPONSE_BUFFER_SIZE - off,
+                            "{\"success\":true,\"shares\":[");
+            for (int i = 0; i < n; i++) {
+                char esc_name[512] = {0}, esc_remark[1024] = {0};
+                json_str_esc(shares[i].name, esc_name, sizeof(esc_name));
+                json_str_esc(shares[i].remark, esc_remark, sizeof(esc_remark));
+                off += snprintf(resp_json + off, RESPONSE_BUFFER_SIZE - off,
+                                "%s{\"name\":\"%s\",\"remark\":\"%s\",\"type\":%u,"
+                                "\"is_disk\":%s,\"is_hidden\":%s,\"is_special\":%s}",
+                                i ? "," : "",
+                                esc_name, esc_remark, shares[i].type,
+                                shares[i].is_disk ? "true" : "false",
+                                shares[i].is_hidden ? "true" : "false",
+                                shares[i].is_special ? "true" : "false");
+                if (off + 512 >= RESPONSE_BUFFER_SIZE) break;
+            }
+            snprintf(resp_json + off, RESPONSE_BUFFER_SIZE - off, "]}");
+            install_log("[HTTP] POST /api/smb/shares: host='%s' -> %d shares", cfg.server, n);
+        }
+
+        struct MHD_Response *resp = MHD_create_response_from_buffer(
+            strlen(resp_json), (void *)resp_json, MHD_RESPMEM_MUST_FREE);
+        add_cors_headers(resp);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_OK, resp);
+        MHD_destroy_response(resp);
+        return ret;
+    }
+
+    /* ── POST /api/smb/browse: list folders (+ .pkg) inside a share ─
+     * Body: {server, port?, username?, password?, workgroup?, share, path?}
+     * path is relative to the share root ("" = root). Directories sort first. */
+    if (strcmp(method, "POST") == 0 && strcmp(url, "/api/smb/browse") == 0) {
+        post_state_t *ps = (post_state_t *)*con_cls;
+        smb_share_config_t cfg;
+        smb_cfg_from_body(ps && ps->data ? ps->data : "", &cfg);
+        smb_client_sanitize_config(&cfg);
+        smb_inherit_saved_credentials(&cfg);
+
+        if (cfg.server[0] == '\0' || cfg.share[0] == '\0') {
+            static const char bad[] = "{\"success\":false,\"error\":\"Server and share are required\"}";
+            struct MHD_Response *resp = MHD_create_response_from_buffer(
+                sizeof(bad) - 1, (void *)bad, MHD_RESPMEM_PERSISTENT);
+            add_cors_headers(resp);
+            MHD_add_response_header(resp, "Content-Type", "application/json");
+            enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_OK, resp);
+            MHD_destroy_response(resp);
+            return ret;
+        }
+
+        install_log("[HTTP] POST /api/smb/browse: host='%s' share='%s' path='%s'",
+                    cfg.server, cfg.share, cfg.path);
+
+        smb_dir_entry_t entries[MAX_SMB_BROWSE_ENTRIES];
+        char err_buf[512] = {0};
+        int n = smb_client_list_dir(&cfg, NULL, entries, MAX_SMB_BROWSE_ENTRIES,
+                                    err_buf, sizeof(err_buf));
+
+        char *resp_json = (char *)malloc(RESPONSE_BUFFER_SIZE);
+        if (!resp_json) {
+            static const char oom[] = "{\"success\":false,\"error\":\"Out of memory\"}";
+            struct MHD_Response *resp = MHD_create_response_from_buffer(
+                sizeof(oom) - 1, (void *)oom, MHD_RESPMEM_PERSISTENT);
+            add_cors_headers(resp);
+            MHD_add_response_header(resp, "Content-Type", "application/json");
+            enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, resp);
+            MHD_destroy_response(resp);
+            return ret;
+        }
+
+        if (n < 0) {
+            char esc[1024] = {0};
+            json_str_esc(err_buf[0] ? err_buf : "Folder listing failed", esc, sizeof(esc));
+            snprintf(resp_json, RESPONSE_BUFFER_SIZE,
+                     "{\"success\":false,\"error\":\"%s\"}", esc);
+            install_log("[HTTP] POST /api/smb/browse: failed share='%s' path='%s': %s",
+                        cfg.share, cfg.path, err_buf);
+        } else {
+            char esc_share[512] = {0}, esc_path[1024] = {0};
+            json_str_esc(cfg.share, esc_share, sizeof(esc_share));
+            json_str_esc(cfg.path, esc_path, sizeof(esc_path));
+            size_t off = 0;
+            off += snprintf(resp_json + off, RESPONSE_BUFFER_SIZE - off,
+                            "{\"success\":true,\"share\":\"%s\",\"path\":\"%s\",\"entries\":[",
+                            esc_share, esc_path);
+            for (int i = 0; i < n; i++) {
+                char esc_name[1024] = {0};
+                json_str_esc(entries[i].name, esc_name, sizeof(esc_name));
+                off += snprintf(resp_json + off, RESPONSE_BUFFER_SIZE - off,
+                                "%s{\"name\":\"%s\",\"is_dir\":%s,\"size\":%llu,\"mtime\":%u}",
+                                i ? "," : "", esc_name,
+                                entries[i].is_dir ? "true" : "false",
+                                (unsigned long long)entries[i].size,
+                                entries[i].mtime);
+                if (off + 512 >= RESPONSE_BUFFER_SIZE) break;
+            }
+            snprintf(resp_json + off, RESPONSE_BUFFER_SIZE - off, "]}");
+            install_log("[HTTP] POST /api/smb/browse: share='%s' path='%s' -> %d entries",
+                        cfg.share, cfg.path, n);
+        }
+
+        struct MHD_Response *resp = MHD_create_response_from_buffer(
+            strlen(resp_json), (void *)resp_json, MHD_RESPMEM_MUST_FREE);
         add_cors_headers(resp);
         MHD_add_response_header(resp, "Content-Type", "application/json");
         enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_OK, resp);

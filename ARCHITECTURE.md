@@ -108,7 +108,7 @@ The primary web server handles all interactive user requests:
 - **Package Icons**: `/api/icon` (extracts or serves cached `icon0.png`), `/api/icon-error`.
 - **Installation Control**: `/api/install` (starts installation), `/api/cancel` (aborts current installation), `/api/poll` / `/api/status` (live progress), `/api/shortcut/install`.
 - **Direct Install Control**: `/api/upload/init`, `/api/upload/status`, `/api/upload/icon`, `/api/upload/finish`, and `/api/upload/cancel`.
-- **SMB & Metadata Cache**: `/api/smb/test`, `/api/cache/stats`, `/api/cache/clear`.
+- **SMB & Metadata Cache**: `/api/smb/test`, `/api/smb/shares` (enumerate shares on a server), `/api/smb/browse` (list folders + PKGs inside a share), `/api/cache/stats`, `/api/cache/clear`.
 - **Leftovers Cleanup**: `/api/leftovers` (scans unlinked patches/DLCs), `/api/leftovers/delete` (purges selected orphans).
 
 ### Range Streaming Server (Port 18841)

@@ -1,14 +1,34 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { SmbSharePickerModal, SmbFolderPickerModal } from './SmbBrowseModals';
 
 export default function SmbShareModal({
   show, onClose, isEditing, form, setForm, testResult, testing, onTest, onSave
 }) {
+  const [sharePickerOpen, setSharePickerOpen] = useState(false);
+  const [folderPickerOpen, setFolderPickerOpen] = useState(false);
+  const [showManual, setShowManual] = useState(false);
+
   if (!show) return null;
 
   const isServerValid = form && form.server && form.server.trim();
   const isShareValid = form && form.share && form.share.trim();
   const isServerHasSlash = form && form.server && (form.server.indexOf('/') !== -1 || form.server.indexOf('\\') !== -1);
   const isSaveDisabled = !isServerValid || (!isShareValid && !isServerHasSlash);
+
+  const portStr = form.port && parseInt(form.port, 10) !== 445 ? `:${parseInt(form.port, 10)}` : '';
+  const cleanPath = (form.path || '').replace(/^\/+/, '');
+  const selectedUrl = isShareValid
+    ? `smb://${(form.server || '').trim()}${portStr}/${form.share.trim()}${cleanPath ? `/${cleanPath}` : ''}`
+    : '';
+
+  const connection = {
+    id: form.id || '',
+    server: form.server || '',
+    port: form.port || 445,
+    username: form.username || '',
+    password: form.password || '',
+    workgroup: form.workgroup || 'WORKGROUP'
+  };
 
   return (
     <div data-modal-dialog="true" role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4">
@@ -28,7 +48,7 @@ export default function SmbShareModal({
               <h3 className="text-lg font-bold text-white">
                 {isEditing ? 'Edit Samba Share' : 'Add Samba Share'}
               </h3>
-              <p className="text-xs text-zinc-400">Configure connection to your network storage</p>
+              <p className="text-xs text-zinc-400">Enter connection details, then pick a shared folder</p>
             </div>
           </div>
           <button
@@ -77,30 +97,6 @@ export default function SmbShareModal({
             </div>
           </div>
 
-          {/* Share & Subfolder */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block font-semibold text-zinc-300 mb-1">Share Name *</label>
-              <input
-                type="text"
-                placeholder="e.g. pkgs, public"
-                value={form.share || ''}
-                onChange={(e) => setForm({ ...form, share: e.target.value })}
-                className="w-full bg-black/50 border border-white/15 rounded-[2px] px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 font-mono focus:outline-none focus:border-white/40"
-              />
-            </div>
-            <div>
-              <label className="block font-semibold text-zinc-300 mb-1">Subfolder (Optional)</label>
-              <input
-                type="text"
-                placeholder="e.g. ps5/pkgs"
-                value={form.path || ''}
-                onChange={(e) => setForm({ ...form, path: e.target.value })}
-                className="w-full bg-black/50 border border-white/15 rounded-[2px] px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 font-mono focus:outline-none focus:border-white/40"
-              />
-            </div>
-          </div>
-
           {/* Credentials */}
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -136,6 +132,99 @@ export default function SmbShareModal({
               className="w-full bg-black/50 border border-white/15 rounded-[2px] px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-white/40"
             />
           </div>
+
+          {/* Share selector */}
+          <div>
+            <label className="block font-semibold text-zinc-300 mb-1">Share *</label>
+            <div className="flex gap-2">
+              <div className="flex-1 min-w-0 bg-black/50 border border-white/15 rounded-[2px] px-3.5 py-2.5 text-sm font-mono truncate">
+                {isShareValid
+                  ? <span className="text-white">{form.share.trim()}</span>
+                  : <span className="text-zinc-500">Not selected</span>}
+              </div>
+              <button
+                type="button"
+                onClick={() => setSharePickerOpen(true)}
+                disabled={!isServerValid}
+                className="px-4 py-2.5 rounded-[2px] bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold transition-colors disabled:opacity-40 cursor-pointer shrink-0"
+              >
+                Select share
+              </button>
+            </div>
+            {!isServerValid && (
+              <p className="text-[11px] text-zinc-500 mt-1">Enter a server above first.</p>
+            )}
+          </div>
+
+          {/* Folder selector (only once a share is picked) */}
+          {isShareValid && (
+            <div>
+              <label className="block font-semibold text-zinc-300 mb-1">Folder (Optional)</label>
+              <div className="flex gap-2">
+                <div className="flex-1 min-w-0 bg-black/50 border border-white/15 rounded-[2px] px-3.5 py-2.5 text-sm font-mono truncate">
+                  {cleanPath
+                    ? <span className="text-white">{cleanPath}</span>
+                    : <span className="text-zinc-500">Share root</span>}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFolderPickerOpen(true)}
+                  className="px-4 py-2.5 rounded-[2px] bg-white/10 hover:bg-white/15 text-zinc-200 text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                >
+                  Browse...
+                </button>
+                {cleanPath && (
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, path: '' })}
+                    className="px-3 py-2.5 rounded-[2px] bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Selected path preview */}
+          {selectedUrl ? (
+            <p className="text-xs font-mono text-cyan-300/90 break-all select-all">{selectedUrl}</p>
+          ) : (
+            <p className="text-[11px] text-zinc-500">No folder selected yet.</p>
+          )}
+
+          {/* Manual fallback */}
+          <button
+            type="button"
+            onClick={() => setShowManual(!showManual)}
+            className="text-[11px] text-zinc-500 hover:text-zinc-200 underline underline-offset-2 cursor-pointer"
+          >
+            {showManual ? 'Hide manual entry' : 'Type share and folder manually instead'}
+          </button>
+          {showManual && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block font-semibold text-zinc-300 mb-1">Share Name *</label>
+                <input
+                  type="text"
+                  placeholder="e.g. pkgs, public"
+                  value={form.share || ''}
+                  onChange={(e) => setForm({ ...form, share: e.target.value })}
+                  className="w-full bg-black/50 border border-white/15 rounded-[2px] px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 font-mono focus:outline-none focus:border-white/40"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-zinc-300 mb-1">Subfolder (Optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. ps5/pkgs"
+                  value={form.path || ''}
+                  onChange={(e) => setForm({ ...form, path: e.target.value })}
+                  className="w-full bg-black/50 border border-white/15 rounded-[2px] px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 font-mono focus:outline-none focus:border-white/40"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Read-Only Option */}
           <button
@@ -201,6 +290,23 @@ export default function SmbShareModal({
           </div>
         </div>
       </div>
+
+      <SmbSharePickerModal
+        show={sharePickerOpen}
+        onClose={() => setSharePickerOpen(false)}
+        connection={connection}
+        selectedShare={form.share || ''}
+        onSelect={(name) => setForm({ ...form, share: name, path: '' })}
+      />
+
+      <SmbFolderPickerModal
+        show={folderPickerOpen}
+        onClose={() => setFolderPickerOpen(false)}
+        connection={connection}
+        share={form.share || ''}
+        initialPath={form.path || ''}
+        onSelect={(path) => setForm({ ...form, path })}
+      />
     </div>
   );
 }

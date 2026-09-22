@@ -28,7 +28,9 @@
 
 #include <smb2/smb2.h>
 #include <smb2/libsmb2.h>
+#include <smb2/libsmb2-raw.h>
 #include <smb2/smb2-errors.h>
+#include <smb2/libsmb2-share-enum.h>
 #include "libsmb2-private.h"
 #include "installer.h"
 
@@ -592,6 +594,193 @@ int smb_client_test_connection(const smb_share_config_t *cfg, char *out_err, siz
         snprintf(out_err, err_sz, "Connected successfully (%s)", clean_cfg.is_read_only ? "Read-Only" : "Read/Write");
     }
     return 0;
+}
+
+static int smb_share_info_cmp(const void *a, const void *b) {
+    const smb_share_info_t *sa = (const smb_share_info_t *)a;
+    const smb_share_info_t *sb = (const smb_share_info_t *)b;
+    /* Disk shares first, non-special first, non-hidden first, then name. */
+    if (sa->is_disk != sb->is_disk) return sb->is_disk - sa->is_disk;
+    if (sa->is_special != sb->is_special) return sa->is_special - sb->is_special;
+    if (sa->is_hidden != sb->is_hidden) return sa->is_hidden - sb->is_hidden;
+    return strcasecmp(sa->name, sb->name);
+}
+
+static int smb_dir_entry_cmp(const void *a, const void *b) {
+    const smb_dir_entry_t *ea = (const smb_dir_entry_t *)a;
+    const smb_dir_entry_t *eb = (const smb_dir_entry_t *)b;
+    if (ea->is_dir != eb->is_dir) return eb->is_dir - ea->is_dir;
+    return strcasecmp(ea->name, eb->name);
+}
+
+int smb_client_list_shares(const smb_share_config_t *cfg,
+                           smb_share_info_t *out, int max_out,
+                           char *out_err, size_t err_sz) {
+    if (!cfg || !out || max_out <= 0) {
+        if (out_err && err_sz > 0) snprintf(out_err, err_sz, "Invalid arguments");
+        return -1;
+    }
+    if (max_out > MAX_SMB_BROWSE_SHARES) max_out = MAX_SMB_BROWSE_SHARES;
+
+    smb_share_config_t clean_cfg = *cfg;
+    smb_client_sanitize_config(&clean_cfg);
+    if (clean_cfg.server[0] == '\0') {
+        if (out_err && err_sz > 0) snprintf(out_err, err_sz, "Server address is required");
+        return -1;
+    }
+
+    /* Connect to IPC$ for share enumeration (credentials only, no share needed). */
+    smb_share_config_t ipc_cfg = clean_cfg;
+    strncpy(ipc_cfg.share, "IPC$", sizeof(ipc_cfg.share) - 1);
+    ipc_cfg.share[sizeof(ipc_cfg.share) - 1] = '\0';
+
+    char conn_err[256] = {0};
+    struct smb2_context *ctx = smb_connect(&ipc_cfg, conn_err, sizeof(conn_err), 0);
+    if (!ctx) {
+        if (out_err && err_sz > 0) {
+            snprintf(out_err, err_sz, "%s",
+                     conn_err[0] ? conn_err : "Failed to connect to server");
+        }
+        install_log("[SMB BROWSE] list_shares: connect to IPC$ on '%s' failed: %s",
+                    clean_cfg.server, conn_err[0] ? conn_err : "unknown");
+        return -1;
+    }
+
+    struct srvsvc_NetrShareEnum_rep *rep = smb2_share_enum_sync(ctx, SHARE_INFO_1);
+    if (!rep) {
+        const char *err = smb2_get_error(ctx);
+        if (!err || !*err) err = "Share enumeration failed";
+        uint32_t nt_err = (uint32_t)smb2_get_nterror(ctx);
+        install_log("[SMB BROWSE] list_shares: enum failed on '%s': %s (nt=0x%08X)",
+                    clean_cfg.server, err, (unsigned int)nt_err);
+        smb_log_nt_diagnostic(nt_err, clean_cfg.server, "IPC$");
+        if (out_err && err_sz > 0) snprintf(out_err, err_sz, "%s", err);
+        smb2_destroy_context(ctx);
+        return -1;
+    }
+
+    int n = 0;
+    if (rep->ses.Level == SHARE_INFO_1) {
+        uint32_t entries = rep->ses.ShareEnum.Level1.EntriesRead;
+        for (uint32_t i = 0; i < entries && n < max_out; i++) {
+            const char *nm = rep->ses.ShareEnum.Level1.share_info_1[i].netname;
+            if (!nm || !*nm) continue;
+            smb_share_info_t *dst = &out[n];
+            memset(dst, 0, sizeof(*dst));
+            strncpy(dst->name, nm, sizeof(dst->name) - 1);
+            const char *rm = rep->ses.ShareEnum.Level1.share_info_1[i].remark;
+            if (rm) strncpy(dst->remark, rm, sizeof(dst->remark) - 1);
+            dst->type = rep->ses.ShareEnum.Level1.share_info_1[i].type;
+            dst->is_disk = ((dst->type & 3) == SRVSVC_SHARE_TYPE_DISKTREE);
+            dst->is_hidden = (dst->type & SRVSVC_SHARE_TYPE_HIDDEN) != 0;
+            dst->is_special = (strcasecmp(nm, "IPC$") == 0 ||
+                               strcasecmp(nm, "ADMIN$") == 0 ||
+                               ((dst->type & 3) == SRVSVC_SHARE_TYPE_IPC));
+            n++;
+        }
+    } else if (rep->ses.Level == SHARE_INFO_0) {
+        uint32_t entries = rep->ses.ShareEnum.Level0.EntriesRead;
+        for (uint32_t i = 0; i < entries && n < max_out; i++) {
+            const char *nm = rep->ses.ShareEnum.Level0.share_info_0[i].netname;
+            if (!nm || !*nm) continue;
+            smb_share_info_t *dst = &out[n];
+            memset(dst, 0, sizeof(*dst));
+            strncpy(dst->name, nm, sizeof(dst->name) - 1);
+            dst->is_special = (strcasecmp(nm, "IPC$") == 0 ||
+                               strcasecmp(nm, "ADMIN$") == 0);
+            n++;
+        }
+    }
+
+    smb2_free_data(ctx, rep);
+    smb2_destroy_context(ctx);
+
+    if (n > 1) qsort(out, (size_t)n, sizeof(out[0]), smb_share_info_cmp);
+    install_log("[SMB BROWSE] list_shares: server='%s' -> %d shares", clean_cfg.server, n);
+    if (out_err && err_sz > 0) out_err[0] = '\0';
+    return n;
+}
+
+int smb_client_list_dir(const smb_share_config_t *cfg, const char *subpath,
+                        smb_dir_entry_t *out, int max_out,
+                        char *out_err, size_t err_sz) {
+    if (!cfg || !out || max_out <= 0) {
+        if (out_err && err_sz > 0) snprintf(out_err, err_sz, "Invalid arguments");
+        return -1;
+    }
+    if (max_out > MAX_SMB_BROWSE_ENTRIES) max_out = MAX_SMB_BROWSE_ENTRIES;
+
+    smb_share_config_t clean_cfg = *cfg;
+    smb_client_sanitize_config(&clean_cfg);
+    if (clean_cfg.server[0] == '\0' || clean_cfg.share[0] == '\0') {
+        if (out_err && err_sz > 0) snprintf(out_err, err_sz, "Server and share are required");
+        return -1;
+    }
+
+    /* Resolve target dir: explicit subpath wins, else configured path. */
+    char target[512] = {0};
+    const char *raw = (subpath && *subpath) ? subpath : clean_cfg.path;
+    if (raw) {
+        size_t d = 0;
+        const char *p = raw;
+        while (*p == '/' || *p == '\\') p++;
+        for (; *p && d + 1 < sizeof(target); p++) {
+            char ch = (*p == '\\') ? '/' : *p;
+            if (ch == '/' && d > 0 && target[d - 1] == '/') continue;
+            target[d++] = ch;
+        }
+        target[d] = '\0';
+        while (d > 0 && target[d - 1] == '/') target[--d] = '\0';
+    }
+
+    char conn_err[256] = {0};
+    struct smb2_context *ctx = smb_connect(&clean_cfg, conn_err, sizeof(conn_err), 0);
+    if (!ctx) {
+        if (out_err && err_sz > 0) {
+            snprintf(out_err, err_sz, "%s",
+                     conn_err[0] ? conn_err : "Failed to connect to share");
+        }
+        return -1;
+    }
+
+    struct smb2dir *dir = smb2_opendir(ctx, target);
+    if (!dir) {
+        const char *err = smb2_get_error(ctx);
+        if (!err || !*err) err = "Folder not found or access denied";
+        if (out_err && err_sz > 0) snprintf(out_err, err_sz, "%s", err);
+        smb2_destroy_context(ctx);
+        return -1;
+    }
+
+    int n = 0;
+    struct smb2dirent *ent;
+    while ((ent = smb2_readdir(ctx, dir)) != NULL) {
+        if (strcmp(ent->name, ".") == 0 || strcmp(ent->name, "..") == 0) continue;
+        if (ent->name[0] == '.') continue;
+        if (ent->name[0] == '\0') continue;
+
+        int is_dir = (ent->st.smb2_type == SMB2_TYPE_DIRECTORY);
+        if (!is_dir) {
+            /* Show directories + .pkg files only; skip other files. */
+            size_t nlen = strlen(ent->name);
+            if (nlen <= 4 || strcasecmp(ent->name + nlen - 4, ".pkg") != 0) continue;
+        }
+        if (n >= max_out) break;
+        smb_dir_entry_t *dst = &out[n];
+        memset(dst, 0, sizeof(*dst));
+        strncpy(dst->name, ent->name, sizeof(dst->name) - 1);
+        dst->is_dir = is_dir;
+        dst->size = (uint64_t)ent->st.smb2_size;
+        dst->mtime = (uint32_t)ent->st.smb2_mtime;
+        n++;
+    }
+
+    smb2_closedir(ctx, dir);
+    smb2_destroy_context(ctx);
+
+    if (n > 1) qsort(out, (size_t)n, sizeof(out[0]), smb_dir_entry_cmp);
+    if (out_err && err_sz > 0) out_err[0] = '\0';
+    return n;
 }
 
 /* Recursive directory scanner helper over SMB */

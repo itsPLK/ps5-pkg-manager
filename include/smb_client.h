@@ -43,6 +43,36 @@ void smb_client_sanitize_config(smb_share_config_t *cfg);
  * Returns 0 on success, or -1 with error message written to out_err. */
 int smb_client_test_connection(const smb_share_config_t *cfg, char *out_err, size_t err_sz);
 
+/* Browse helpers for guided setup (no manual share/path typing).
+ * list_shares connects to IPC$ and enumerates visible shares.
+ * list_dir lists entries inside share[/path][/subpath]. */
+#define MAX_SMB_BROWSE_SHARES 128
+#define MAX_SMB_BROWSE_ENTRIES 256
+
+typedef struct {
+    char name[128];
+    char remark[256];
+    uint32_t type;
+    int is_disk;
+    int is_hidden;
+    int is_special; /* IPC$, ADMIN$, etc. */
+} smb_share_info_t;
+
+typedef struct {
+    char name[256];
+    int is_dir;
+    uint64_t size;
+    uint32_t mtime;
+} smb_dir_entry_t;
+
+int smb_client_list_shares(const smb_share_config_t *cfg,
+                           smb_share_info_t *out, int max_out,
+                           char *out_err, size_t err_sz);
+
+int smb_client_list_dir(const smb_share_config_t *cfg, const char *subpath,
+                        smb_dir_entry_t *out, int max_out,
+                        char *out_err, size_t err_sz);
+
 /* Scan an SMB share for .pkg files.
  * pkg_cb is called for each found .pkg file.
  * Returns number of packages found on success, or negative on error. */
