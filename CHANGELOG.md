@@ -5,6 +5,9 @@
 ### Direct Install
 - PKG files can now be installed from another device, such as a PC, directly to the console without a temporary disk copy
 
+### Networking
+- Moved package streaming and Direct Install services to ports `18841` and `18842` to avoid potential conflicts with other homebrew applications. The web interface remains on port `8844`.
+
 ### SMB Streaming
 - Improved SMB package streaming performance, reaching approximately 110 MB/s during installs in ideal conditions
 - Added streaming diagnostics to help identify network and server bottlenecks

@@ -15,6 +15,7 @@
 
 - **Clean Web Interface**: Displays your packages with package titles, icons, and version information.
 - **USB & Network (Samba/SMB) Support**: Automatically detects packages on connected USB drives, or stream them over your local network from a PC or NAS via Samba shares.
+- **Direct Install**: Install a local PKG file from another device on your network, such as a PC, directly to the console.
 - **Multi-Part Packages & Disc Swapping**: Install large packages split across multiple optical discs or USB drives, with on-screen prompts when swapping discs. Ideal for physical backups!
 - **No Duplicate Storage Needed**: Installs packages directly on the fly without requiring double the storage space for temporary copy files.
 - **Installed Version Detection**: Checks your console to display installed application versions and prevent duplicate package installs.
@@ -42,6 +43,9 @@ When using a USB drive or optical disc, packages are detected in:
 
 ### Network Shares (Samba / SMB)
 You can configure SMB network shares in the app's **Settings** tab to browse and install packages stored on your PC or NAS.
+
+### Direct Install
+From another device on the same network, open the PKG Manager interface and choose **Direct Install**. Select or drop a local `.pkg` file to install it directly on the console.
 
 ### Multi-Part Packages
 If you want to back up large packages onto optical discs (Blu-ray, DVD) or are limited by storage media size, you can split your package into multi-part files using the included tool:

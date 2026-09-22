@@ -55,10 +55,12 @@ This compiles and runs tests for:
 - Orphaned update and DLC detection (`test_leftovers`)
 - Edge cases and error handling (`test_edge_cases`)
 - Multi-part packages and virtual stream engine (`test_multipart`)
-- Legacy CSS syntax transformer (`test_fix_legacy_css.py`)
 - PS5 installer stream simulation (`test_stream_sim`) — pairs the PS5
   request-pattern simulator (`tests/ps5_sim.c`) against the real stream
   server (`src/stream_server.c`) on the host; no PS5 required (see below)
+- Direct Install WebSocket transport and live-stream tests (`test_ws_upload`,
+  `test_ws_stream`, `test_ws_stream_far`, `test_direct_install_e2e`)
+- In-memory package parsing (`test_parse_mem`)
 - Legacy CSS syntax transformer (`test_fix_legacy_css.py`)
 
 ### PS5 Installer Stream Simulator
@@ -86,7 +88,7 @@ probe that must 404, then two parallel bulk connections serving contiguous
 
 ### Direct Install over WebSocket
 
-The Direct Install page lets a LAN browser push a local `.pkg` to the
+The Direct Install page lets a LAN browser, such as a PC, push a local `.pkg` to the
 daemon, which streams it straight into the installer from RAM — nothing
 is stored on disk. Install can start as soon as the header is parsed,
 while the rest still uploads:
@@ -103,7 +105,8 @@ while the rest still uploads:
 - Metadata: additive `pkg_parser_parse_mem()`; install entry
   `installer_start_live()`; `/api/install` routes `live:` URIs.
 - Frontend: `DirectInstallView.jsx` + `api/directInstall.js` +
-  `hooks/useDirectUpload.js` (Header "Direct Install" button). Install is
+  `hooks/useDirectUpload.js` (Header "Direct Install" button and app-wide
+  file drop). Install is
   enabled at `header_ready`, with sent/installed dual progress.
 - Host tests (all in `make test`): `test_ws_stream` (ring unit),
   `test_parse_mem` (parse vs parse_mem differential),
