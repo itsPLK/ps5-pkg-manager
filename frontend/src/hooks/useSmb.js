@@ -19,7 +19,6 @@ export function useSmb(props) {
     username: '',
     password: '',
     workgroup: 'WORKGROUP',
-    is_read_only: false,
     enabled: true
   });
   const [smbTesting, setSmbTesting] = useState(false);

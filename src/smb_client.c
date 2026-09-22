@@ -372,26 +372,23 @@ static void smb_test_error_cb(struct smb2_context *smb2, const char *error_strin
 static void smb_log_nt_diagnostic(uint32_t nt_err, const char *server, const char *share) {
     if (nt_err == 0xC000015B) {
         install_log("[SMB TEST] -> DIAGNOSTIC: NT status 0x%08X (STATUS_LOGON_TYPE_NOT_GRANTED).", nt_err);
-        install_log("[SMB TEST] -> Windows security policy blocks network logons for this account.");
-        install_log("[SMB TEST] -> On Windows 10/11, 'Guest' is in 'Deny access to this computer from the network' by default.");
-        install_log("[SMB TEST] -> FIX 1: Open secpol.msc on Windows -> Local Policies -> User Rights Assignment -> double-click 'Deny access to this computer from the network' -> select 'Guest' -> click Remove.");
-        install_log("[SMB TEST] -> FIX 2 (Recommended): In Settings, enter a local Windows user account and password instead of Guest.");
+        install_log("[SMB TEST] -> The SMB server does not allow this account to log in over the network.");
+        install_log("[SMB TEST] -> Check the server's remote-access policy, or enter credentials for an account allowed to connect.");
     } else if (nt_err == 0xC0000072 || nt_err == 0xC000006D || nt_err == 0xC000006E) {
         install_log("[SMB TEST] -> DIAGNOSTIC: NT status 0x%08X (%s).", nt_err, nterror_to_str(nt_err));
-        install_log("[SMB TEST] -> On Windows 10/11, the local 'Guest' account is DISABLED by default.");
-        install_log("[SMB TEST] -> FIX 1 (Enable Guest): On the Windows PC, open PowerShell/CMD as Admin and run: 'net user Guest /active:yes'.");
-        install_log("[SMB TEST] -> FIX 2 (Use Windows User): In Settings, enter your local Windows username and password.");
+        install_log("[SMB TEST] -> The SMB server rejected the supplied credentials or the account is unavailable.");
+        install_log("[SMB TEST] -> Check the username, password, workgroup/domain, and whether guest access is enabled on the server.");
     } else if (nt_err == 0xC0000022) {
         install_log("[SMB TEST] -> DIAGNOSTIC: NT status 0x%08X (STATUS_ACCESS_DENIED).", nt_err);
-        install_log("[SMB TEST] -> Windows denied anonymous access or folder permissions lack 'Everyone'/'Guest'.");
-        install_log("[SMB TEST] -> FIX: In Windows folder Properties -> Security tab -> Edit -> Add 'Everyone' and 'Guest' with Read permissions, or enter a Windows account with password.");
+        install_log("[SMB TEST] -> The SMB server denied access to the share or requested path.");
+        install_log("[SMB TEST] -> Check the account's share and filesystem permissions, or enter credentials for an account with access.");
     } else if (nt_err == 0xC00000CC) {
         install_log("[SMB TEST] -> DIAGNOSTIC: NT status 0x%08X (STATUS_BAD_NETWORK_NAME).", nt_err);
-        install_log("[SMB TEST] -> Share '%s' was not found on '%s'. Verify the exact share name (use the SMB share name, not a Windows path).",
+        install_log("[SMB TEST] -> Share '%s' was not found on '%s'. Verify the exact SMB share name, not a local filesystem path.",
                     share ? share : "", server ? server : "");
     } else if (nt_err == 0xC000000D) {
         install_log("[SMB TEST] -> DIAGNOSTIC: NT status 0x%08X (STATUS_INVALID_PARAMETER).", nt_err);
-        install_log("[SMB TEST] -> Windows rejected anonymous logon (common post-KB5026436 where SMB signing is required).");
+        install_log("[SMB TEST] -> The SMB server rejected the connection parameters. Check the server settings and supplied credentials.");
     } else if (nt_err == 0xC0000203) {
         install_log("[SMB TEST] -> DIAGNOSTIC: NT status 0x%08X (STATUS_USER_SESSION_DELETED). Server closed the SMB session.", nt_err);
     } else if (nt_err != 0) {
@@ -425,7 +422,7 @@ static struct smb2_context *smb_connect(const smb_share_config_t *cfg, char *out
 
     smb2_set_timeout(ctx, 10);
     /* Set security_mode to 0 (do not request signing).
-     * If the server REQUIRES signing (e.g. Windows 11 Enterprise), libsmb2
+     * If the server requires signing, libsmb2
      * will automatically enable it from the server's NEGOTIATE response.
      * But if the server only SUPPORTS signing (e.g. Samba / Linux NAS),
      * setting 0 avoids burning CPU on software AES-CMAC-128 / HMAC-SHA256
@@ -472,13 +469,13 @@ static struct smb2_context *smb_connect(const smb_share_config_t *cfg, char *out
 
         if (out_err && err_sz > 0) {
             if (nt_err == 0xC000015B) {
-                snprintf(out_err, err_sz, "Logon type not granted (0x%08X): Windows policy blocks this account from network logon. In secpol.msc, remove Guest from 'Deny access to this computer from the network', or enter Windows credentials.",
+                snprintf(out_err, err_sz, "Logon type not granted (0x%08X): The SMB server does not allow this account to connect over the network. Check its remote-access policy or use an account that is allowed to connect.",
                          nt_err);
             } else if (nt_err == 0xC000006D || nt_err == 0xC0000072 || nt_err == 0xC000006E) {
-                snprintf(out_err, err_sz, "Logon rejected (0x%08X %s): Windows rejected the logon (Guest account is disabled by default on Windows 10/11). Enable it ('net user Guest /active:yes' in Windows) or enter Windows credentials.",
+                snprintf(out_err, err_sz, "Logon rejected (0x%08X %s): The SMB server rejected the supplied credentials or the account is unavailable. Check the username, password, workgroup/domain, and guest-access settings.",
                          nt_err, nt_str ? nt_str : "STATUS_LOGON_FAILURE");
             } else if (nt_err == 0xC0000022) {
-                snprintf(out_err, err_sz, "Access denied (0x%08X STATUS_ACCESS_DENIED): Windows denied unauthenticated access. Verify folder NTFS & Share permissions grant access, or enter Windows credentials.",
+                snprintf(out_err, err_sz, "Access denied (0x%08X STATUS_ACCESS_DENIED): The SMB server denied access to the share or requested path. Check the account's share and filesystem permissions, or use credentials for an account with access.",
                          nt_err);
             } else if (nt_err == 0xC00000CC) {
                 snprintf(out_err, err_sz, "Share '%s' not found on '%s' (0x%08X STATUS_BAD_NETWORK_NAME)",
@@ -519,11 +516,10 @@ int smb_client_test_connection(const smb_share_config_t *cfg, char *out_err, siz
                 clean_cfg.port > 0 ? clean_cfg.port : SMB_DEFAULT_PORT,
                 clean_cfg.share,
                 clean_cfg.path[0] ? clean_cfg.path : "/");
-    install_log("[SMB TEST] Config: user='%s', workgroup='%s', password=%s, read_only=%d",
+    install_log("[SMB TEST] Config: user='%s', workgroup='%s', password=%s",
                 clean_cfg.username[0] ? clean_cfg.username : "(none/guest)",
                 clean_cfg.workgroup[0] ? clean_cfg.workgroup : "(none)",
-                clean_cfg.password[0] ? "(configured)" : "(none)",
-                clean_cfg.is_read_only);
+                clean_cfg.password[0] ? "(configured)" : "(none)");
 
     struct smb2_context *ctx = smb_connect(&clean_cfg, out_err, err_sz, 1);
     if (!ctx) {
@@ -557,41 +553,11 @@ int smb_client_test_connection(const smb_share_config_t *cfg, char *out_err, siz
     smb2_closedir(ctx, dir);
     install_log("[SMB TEST] Folder access verified: path '%s' is accessible", target_dir[0] ? target_dir : "/");
 
-    /* Test write permissions if configured as read-write */
-    if (!clean_cfg.is_read_only) {
-        char test_file[512];
-        if (target_dir[0] != '\0') {
-            snprintf(test_file, sizeof(test_file), "%s/.pkgmgr_test", target_dir);
-        } else {
-            snprintf(test_file, sizeof(test_file), ".pkgmgr_test");
-        }
-        install_log("[SMB TEST] Testing write permission (creating test file '%s')...", test_file);
-
-        struct smb2fh *tfh = smb2_open(ctx, test_file, O_WRONLY | O_CREAT | O_TRUNC);
-        if (tfh) {
-            smb2_close(ctx, tfh);
-            smb2_unlink(ctx, test_file);
-            install_log("[SMB TEST] Write permission confirmed (successfully created & removed test file)");
-        } else {
-            const char *err = smb2_get_error(ctx);
-            if (!err || !*err) err = "Access denied";
-            uint32_t nt_err = (uint32_t)smb2_get_nterror(ctx);
-            install_log("[SMB TEST] Write permission DENIED: nt_status=0x%08X (%s), error='%s'. Share will be treated as Read-Only.",
-                        (unsigned int)nt_err, nterror_to_str(nt_err), err);
-            if (out_err && err_sz > 0) {
-                snprintf(out_err, err_sz, "Connected, but share is read-only (%s)", err);
-            }
-            smb2_destroy_context(ctx);
-            install_log("[SMB TEST] ==================== SMB CONNECTION TEST RESULT: SUCCESS (READ-ONLY) ====================");
-            return 1; /* Note 1 = connected but read-only */
-        }
-    }
-
     smb2_destroy_context(ctx);
-    install_log("[SMB TEST] Share mode: %s", clean_cfg.is_read_only ? "Read-Only" : "Read/Write");
+    install_log("[SMB TEST] Share mode: Read-Only (SMB sources are read-only)");
     install_log("[SMB TEST] ==================== SMB CONNECTION TEST RESULT: SUCCESS ====================");
     if (out_err && err_sz > 0) {
-        snprintf(out_err, err_sz, "Connected successfully (%s)", clean_cfg.is_read_only ? "Read-Only" : "Read/Write");
+        snprintf(out_err, err_sz, "Connected successfully (Read-Only)");
     }
     return 0;
 }
@@ -731,6 +697,21 @@ int smb_client_list_dir(const smb_share_config_t *cfg, const char *subpath,
         }
         target[d] = '\0';
         while (d > 0 && target[d - 1] == '/') target[--d] = '\0';
+    }
+
+    /* Browse paths come from an HTTP request. Keep them below the selected
+     * share root even if a caller bypasses the guided picker. */
+    const char *segment = target;
+    while (*segment) {
+        const char *end = strchr(segment, '/');
+        size_t len = end ? (size_t)(end - segment) : strlen(segment);
+        if ((len == 1 && segment[0] == '.') ||
+            (len == 2 && segment[0] == '.' && segment[1] == '.')) {
+            if (out_err && err_sz > 0) snprintf(out_err, err_sz, "Invalid folder path");
+            return -1;
+        }
+        if (!end) break;
+        segment = end + 1;
     }
 
     char conn_err[256] = {0};

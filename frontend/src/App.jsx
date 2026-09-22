@@ -890,7 +890,6 @@ export default function App() {
                 username: '',
                 password: '',
                 workgroup: 'WORKGROUP',
-                is_read_only: false,
                 enabled: true
               });
               setSmbTestResult(null);

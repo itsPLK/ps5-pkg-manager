@@ -1016,7 +1016,7 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         char err_buf[512] = {0};
         int res = smb_client_test_connection(&cfg, err_buf, sizeof(err_buf));
         int success = (res == 0 || res == 1);
-        int is_ro = (res == 1) || cfg.is_read_only;
+        int is_ro = 1; /* SMB sources are read-only; no network write probe. */
 
         install_log("[HTTP] POST /api/smb/test: finished with res=%d (success=%s, is_ro=%s, message='%s')",
                     res, success ? "true" : "false", is_ro ? "true" : "false", err_buf);

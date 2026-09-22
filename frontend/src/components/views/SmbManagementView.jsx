@@ -118,13 +118,6 @@ export default function SmbManagementView({ settings, onBack, onAdd, onEdit, onT
                             <h4 className="text-base font-bold text-white truncate">
                               {sh.label || `${sh.server}/${sh.share}`}
                             </h4>
-                            <span className={`text-[10px] px-2.5 py-0.5 rounded-[2px] font-semibold border shrink-0 ${
-                              sh.is_read_only
-                                ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                                : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                            }`}>
-                              {sh.is_read_only ? 'Read-Only' : 'Read/Write'}
-                            </span>
                             {!sh.enabled && (
                               <span className="text-[10px] px-2 py-0.5 rounded-[2px] font-semibold bg-zinc-800 text-zinc-400 border border-zinc-700 shrink-0">
                                 Disabled

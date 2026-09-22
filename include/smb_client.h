@@ -20,7 +20,7 @@ typedef struct {
     char username[64];       /* Username, empty for guest */
     char password[64];       /* Password */
     char workgroup[64];      /* Workgroup / domain, e.g. "WORKGROUP" */
-    int is_read_only;        /* 0 = read/write (cache to share), 1 = read-only */
+    int is_read_only;        /* Legacy setting; SMB sources are always read-only */
 } smb_share_config_t;
 
 /* Parse an smb:// URL into its components:

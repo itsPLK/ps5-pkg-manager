@@ -1,22 +1,24 @@
 import React, { useState } from 'react';
 import { SmbSharePickerModal, SmbFolderPickerModal } from './SmbBrowseModals';
+import { browseSmb } from '../../api/smb';
 
 export default function SmbShareModal({
   show, onClose, isEditing, form, setForm, testResult, testing, onTest, onSave
 }) {
   const [sharePickerOpen, setSharePickerOpen] = useState(false);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
-  const [showManual, setShowManual] = useState(false);
+  const [openingFolder, setOpeningFolder] = useState(false);
+  const [folderBrowseError, setFolderBrowseError] = useState('');
+  const [folderPreflight, setFolderPreflight] = useState(null);
 
   if (!show) return null;
 
   const isServerValid = form && form.server && form.server.trim();
   const isShareValid = form && form.share && form.share.trim();
-  const isServerHasSlash = form && form.server && (form.server.indexOf('/') !== -1 || form.server.indexOf('\\') !== -1);
-  const isSaveDisabled = !isServerValid || (!isShareValid && !isServerHasSlash);
+  const isSaveDisabled = !isServerValid || !isShareValid;
 
   const portStr = form.port && parseInt(form.port, 10) !== 445 ? `:${parseInt(form.port, 10)}` : '';
-  const cleanPath = (form.path || '').replace(/^\/+/, '');
+  const cleanPath = (form.path || '').replace(/^[\\/]+|[\\/]+$/g, '').replace(/\\/g, '/');
   const selectedUrl = isShareValid
     ? `smb://${(form.server || '').trim()}${portStr}/${form.share.trim()}${cleanPath ? `/${cleanPath}` : ''}`
     : '';
@@ -28,6 +30,29 @@ export default function SmbShareModal({
     username: form.username || '',
     password: form.password || '',
     workgroup: form.workgroup || 'WORKGROUP'
+  };
+
+  const openFolderPicker = async () => {
+    if (!isShareValid || openingFolder) return;
+
+    setOpeningFolder(true);
+    setFolderBrowseError('');
+    try {
+      const data = await browseSmb({ ...connection, share: form.share.trim(), path: cleanPath });
+      if (!data || !data.success || !Array.isArray(data.entries)) {
+        setFolderPreflight(null);
+        setFolderBrowseError((data && (data.error || data.message)) || 'Could not access this share. Check the server and password.');
+        return;
+      }
+
+      setFolderPreflight({ path: cleanPath, entries: data.entries });
+      setFolderPickerOpen(true);
+    } catch (e) {
+      setFolderPreflight(null);
+      setFolderBrowseError(e && e.message ? e.message : 'Could not access this share. Check the server and password.');
+    } finally {
+      setOpeningFolder(false);
+    }
   };
 
   return (
@@ -168,10 +193,11 @@ export default function SmbShareModal({
                 </div>
                 <button
                   type="button"
-                  onClick={() => setFolderPickerOpen(true)}
-                  className="px-4 py-2.5 rounded-[2px] bg-white/10 hover:bg-white/15 text-zinc-200 text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                  onClick={openFolderPicker}
+                  disabled={openingFolder}
+                  className="px-4 py-2.5 rounded-[2px] bg-white/10 hover:bg-white/15 text-zinc-200 text-xs font-semibold transition-colors disabled:opacity-40 cursor-pointer shrink-0"
                 >
-                  Browse...
+                  {openingFolder ? 'Checking...' : 'Browse...'}
                 </button>
                 {cleanPath && (
                   <button
@@ -183,6 +209,9 @@ export default function SmbShareModal({
                   </button>
                 )}
               </div>
+              {folderBrowseError && (
+                <p className="text-[11px] text-rose-300 mt-1">{folderBrowseError}</p>
+              )}
             </div>
           )}
 
@@ -192,59 +221,6 @@ export default function SmbShareModal({
           ) : (
             <p className="text-[11px] text-zinc-500">No folder selected yet.</p>
           )}
-
-          {/* Manual fallback */}
-          <button
-            type="button"
-            onClick={() => setShowManual(!showManual)}
-            className="text-[11px] text-zinc-500 hover:text-zinc-200 underline underline-offset-2 cursor-pointer"
-          >
-            {showManual ? 'Hide manual entry' : 'Type share and folder manually instead'}
-          </button>
-          {showManual && (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block font-semibold text-zinc-300 mb-1">Share Name *</label>
-                <input
-                  type="text"
-                  placeholder="e.g. pkgs, public"
-                  value={form.share || ''}
-                  onChange={(e) => setForm({ ...form, share: e.target.value })}
-                  className="w-full bg-black/50 border border-white/15 rounded-[2px] px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 font-mono focus:outline-none focus:border-white/40"
-                />
-              </div>
-              <div>
-                <label className="block font-semibold text-zinc-300 mb-1">Subfolder (Optional)</label>
-                <input
-                  type="text"
-                  placeholder="e.g. ps5/pkgs"
-                  value={form.path || ''}
-                  onChange={(e) => setForm({ ...form, path: e.target.value })}
-                  className="w-full bg-black/50 border border-white/15 rounded-[2px] px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 font-mono focus:outline-none focus:border-white/40"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Read-Only Option */}
-          <button
-            type="button"
-            onClick={() => setForm({ ...form, is_read_only: !form.is_read_only })}
-            className="w-full text-left bg-white/5 hover:bg-white/10 border border-white/10 rounded-[2px] ps5-focus-item p-3.5 flex items-center justify-between cursor-pointer transition-colors"
-          >
-            <div className="min-w-0 flex-1 mr-3">
-              <span className="font-semibold text-white block">Share is Read-Only</span>
-            </div>
-            <div className={`w-5 h-5 rounded-[2px] border flex items-center justify-center shrink-0 ${
-              form.is_read_only ? 'bg-amber-600 border-amber-500 text-white' : 'bg-black/40 border-white/20'
-            }`}>
-              {form.is_read_only && (
-                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              )}
-            </div>
-          </button>
 
           {/* Test Result Banner */}
           {testResult && (
@@ -305,6 +281,8 @@ export default function SmbShareModal({
         connection={connection}
         share={form.share || ''}
         initialPath={form.path || ''}
+        initialEntries={folderPreflight && folderPreflight.entries}
+        initialEntriesPath={folderPreflight && folderPreflight.path}
         onSelect={(path) => setForm({ ...form, path })}
       />
     </div>

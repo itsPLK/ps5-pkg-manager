@@ -137,7 +137,7 @@ export function SmbSharePickerModal({ show, onClose, connection, selectedShare, 
   return pickerShell(body, onClose, 'Select Share', (connection && connection.server) || '');
 }
 
-export function SmbFolderPickerModal({ show, onClose, connection, share, initialPath, onSelect }) {
+export function SmbFolderPickerModal({ show, onClose, connection, share, initialPath, initialEntries, initialEntriesPath, onSelect }) {
   const [segs, setSegs] = useState([]);
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -167,8 +167,15 @@ export function SmbFolderPickerModal({ show, onClose, connection, share, initial
     if (show) {
       const start = splitPath(initialPath || '');
       setSegs(start);
-      setEntries([]);
-      load(start);
+      const startPath = start.join('/');
+      if (Array.isArray(initialEntries) && initialEntriesPath === startPath) {
+        setEntries(initialEntries);
+        setError('');
+        setLoading(false);
+      } else {
+        setEntries([]);
+        load(start);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [show]);
@@ -227,6 +234,16 @@ export function SmbFolderPickerModal({ show, onClose, connection, share, initial
         </div>
       ) : (
         <div className="max-h-72 overflow-y-auto rounded-[2px] border border-white/10 divide-y divide-white/5">
+          {segs.length > 0 && (
+            <button
+              type="button"
+              onClick={() => go(segs.slice(0, -1))}
+              className="w-full text-left px-3 py-2.5 flex items-center space-x-3 bg-white/[0.04] hover:bg-white/[0.09] text-zinc-200 cursor-pointer transition-colors"
+            >
+              <span className="text-zinc-400 shrink-0 text-base leading-none">←</span>
+              <span className="text-sm font-semibold">Back</span>
+            </button>
+          )}
           {dirs.length === 0 && entries.length === 0 && (
             <p className="px-3 py-3 text-[11px] text-zinc-500">No subfolders here. PKGs directly in this folder will still be found when scanning.</p>
           )}
@@ -267,7 +284,7 @@ export function SmbFolderPickerModal({ show, onClose, connection, share, initial
         <button
           type="button"
           onClick={() => { onSelect(currentPath); onClose(); }}
-          disabled={loading}
+          disabled={loading || !!error}
           className="px-5 py-2 rounded-[2px] bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold cursor-pointer transition-colors disabled:opacity-40"
         >
           Use this folder
