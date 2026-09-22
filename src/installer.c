@@ -1297,6 +1297,7 @@ int installer_init(const char *server_url) {
     int ret = sceAppInstUtilInitialize();
     if (ret != 0) {
         printf("[PKG Manager] sceAppInstUtilInitialize returned 0x%08X\n", ret);
+        ps5_notify("PKG Manager: app install service returned 0x%08X", ret);
     }
 #endif
 

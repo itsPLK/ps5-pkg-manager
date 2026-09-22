@@ -55,13 +55,24 @@ static pid_t find_pid(const char *name) {
         return -1;
     }
 
-    for (uint8_t *ptr = buf; ptr < (buf + buf_size);) {
-        int ki_structsize = *(int *)ptr;
-        pid_t ki_pid = *(pid_t *)&ptr[72];
-        char *ki_tdname = (char *)&ptr[447];
+    for (uint8_t *ptr = buf; ptr < buf + buf_size;) {
+        size_t remaining = (size_t)(buf + buf_size - ptr);
+        int ki_structsize;
+        if (remaining < sizeof(ki_structsize)) break;
+        memcpy(&ki_structsize, ptr, sizeof(ki_structsize));
+        /* The kinfo_proc layout may differ across firmware versions. Never
+         * loop forever or read beyond a record if sysctl returns bad data. */
+        if (ki_structsize < 448 || (size_t)ki_structsize > remaining) {
+            printf("[PKG Manager] Invalid process record size %d\n", ki_structsize);
+            break;
+        }
+        pid_t ki_pid;
+        memcpy(&ki_pid, ptr + 72, sizeof(ki_pid));
+        const char *ki_tdname = (const char *)ptr + 447;
 
         ptr += ki_structsize;
-        if (!strcmp(name, ki_tdname) && ki_pid != mypid) {
+        if (memchr(ki_tdname, '\0', (size_t)ki_structsize - 447) &&
+            !strcmp(name, ki_tdname) && ki_pid != mypid) {
             pid = ki_pid;
         }
     }
@@ -122,6 +133,7 @@ __attribute__((used)) volatile const char pkgmgr_version_sig[] = "PKGMGR_VER:" P
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
+    ps5_notify("PKG Manager v%s starting...", PKGMGR_VERSION);
 
 #if defined(__Prospero__) || defined(PS5_BUILD)
     syscall(SYS_thr_set_name, -1, "pkgmgr.elf");
@@ -130,6 +142,7 @@ int main(int argc, char **argv) {
     while ((old_pid = find_pid("pkgmgr.elf")) > 0) {
         if (kill(old_pid, SIGKILL)) {
             printf("[PKG Manager] kill failed\n");
+            ps5_notify("PKG Manager: could not stop previous process (%d)", (int)old_pid);
             return EXIT_FAILURE;
         }
         sleep(1);
@@ -147,12 +160,20 @@ int main(int argc, char **argv) {
 
 #if defined(__Prospero__) || defined(PS5_BUILD)
     printf("[PKG Manager] Initializing PS5 system services...\n");
-    if (sceNetCtlInit() == 0) {
+    int net_result = sceNetCtlInit();
+    if (net_result == 0) {
         printf("[PKG Manager] Network controller initialized.\n");
+    } else {
+        printf("[PKG Manager] sceNetCtlInit returned 0x%08X\n", net_result);
+        ps5_notify("PKG Manager: network init returned 0x%08X", net_result);
     }
     int user_prio = 256;
-    if (sceUserServiceInitialize(&user_prio) == 0) {
+    int user_result = sceUserServiceInitialize(&user_prio);
+    if (user_result == 0) {
         printf("[PKG Manager] User service initialized.\n");
+    } else {
+        printf("[PKG Manager] sceUserServiceInitialize returned 0x%08X\n", user_result);
+        ps5_notify("PKG Manager: user service init returned 0x%08X", user_result);
     }
 #endif
 
@@ -163,6 +184,7 @@ int main(int argc, char **argv) {
     printf("[PKG Manager] Initializing installer subsystem...\n");
     if (installer_init(server_url) != 0) {
         fprintf(stderr, "[PKG Manager] Failed to initialize installer subsystem!\n");
+        ps5_notify("PKG Manager: installer initialization failed");
         return 1;
     }
     install_log("[PKG Manager] Starting PKG Manager v%s (%s, %s)...",
@@ -170,25 +192,29 @@ int main(int argc, char **argv) {
 
     printf("[PKG Manager] Initializing package scanner (%s & %s)...\n", PKG_DEFAULT_DIR, PKG_DISC_DIR);
     pkg_scanner_init();
-    int found_count = 0;
-    if (pkg_scanner_has_manifest()) {
-        found_count = (int)pkg_scanner_get_count();
-        printf("[PKG Manager] Loaded %d package(s) on startup from cache manifest.\n", found_count);
-    } else {
-        found_count = pkg_scanner_scan();
-        printf("[PKG Manager] Initial scan found %d package(s) on startup.\n", found_count);
-    }
 
     printf("[PKG Manager] Starting HTTP server on port %d...\n", port);
     if (http_server_start(port) != 0) {
         fprintf(stderr, "[PKG Manager] Failed to start HTTP server on port %d!\n", port);
-        ps5_notify("PKG Manager: HTTP server failed to start (port %d busy?)", port);
+        ps5_notify("PKG Manager: HTTP server failed to start on port %d", port);
         installer_shutdown();
         return 1;
     }
 
     printf("[PKG Manager] Verifying PS5 home screen shortcut...\n");
-    app_installer_install_if_needed();
+    if (app_installer_install_if_needed() != 0) {
+        fprintf(stderr, "[PKG Manager] Failed to install home screen shortcut!\n");
+    }
+
+    int found_count = 0;
+    if (pkg_scanner_has_manifest()) {
+        found_count = (int)pkg_scanner_get_count();
+        printf("[PKG Manager] Loaded %d package(s) on startup from cache manifest.\n", found_count);
+    } else {
+        ps5_notify("PKG Manager: server ready on port %d; scanning packages...", port);
+        found_count = pkg_scanner_scan();
+        printf("[PKG Manager] Initial scan found %d package(s) on startup.\n", found_count);
+    }
 
     char current_ip[64] = "unknown";
     if (get_local_ip(current_ip, sizeof(current_ip)) != 0) {

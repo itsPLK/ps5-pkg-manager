@@ -22,7 +22,11 @@ void ps5_notify(const char *fmt, ...) {
     va_end(args);
 
 #if defined(__Prospero__) || defined(PS5_BUILD)
-    sceKernelSendNotificationRequest(0, &req, sizeof(req), 0);
+    int result = sceKernelSendNotificationRequest(0, &req, sizeof(req), 0);
+    if (result != 0) {
+        fprintf(stderr, "[PKG Manager] Notification failed (0x%08X): %s\n",
+                result, req.message);
+    }
 #else
     printf("[PS5 Notification] %s\n", req.message);
 #endif

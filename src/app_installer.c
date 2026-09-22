@@ -31,11 +31,12 @@ static int install_file(const char *path, const uint8_t *data, size_t size) {
     FILE *f = fopen(path, "wb");
     if (!f) return -1;
     if (fwrite(data, 1, size, f) != size) {
+        int write_errno = errno ? errno : EIO;
         fclose(f);
+        errno = write_errno;
         return -1;
     }
-    fclose(f);
-    return 0;
+    return fclose(f) == 0 ? 0 : -1;
 }
 
 static int install_app(const char *title_id, const char *dir) {
@@ -114,28 +115,37 @@ static int do_install(int is_update) {
      * break subsequent package installs until daemon restart. */
 
     if (mkdir(base_dir, 0755) != 0 && errno != EEXIST) {
-        printf("[APP_INSTALLER] Failed to create app dir %s: %s\n", base_dir, strerror(errno));
+        int error = errno;
+        printf("[APP_INSTALLER] Failed to create app dir %s: %s\n", base_dir, strerror(error));
+        ps5_notify("PKG Manager shortcut: app directory failed (errno %d)", error);
         return -1;
     }
 
     if (mkdir(sce_sys_dir, 0755) != 0 && errno != EEXIST) {
-        printf("[APP_INSTALLER] Failed to create sce_sys dir %s: %s\n", sce_sys_dir, strerror(errno));
+        int error = errno;
+        printf("[APP_INSTALLER] Failed to create sce_sys dir %s: %s\n", sce_sys_dir, strerror(error));
+        ps5_notify("PKG Manager shortcut: sce_sys directory failed (errno %d)", error);
         return -1;
     }
 
     if (install_file(param_path, assets_param_json, assets_param_json_len) != 0) {
+        int error = errno;
         printf("[APP_INSTALLER] Failed to write %s\n", param_path);
+        ps5_notify("PKG Manager shortcut: param.json write failed (errno %d)", error);
         return -1;
     }
 
     if (install_file(icon_path, assets_icon0_png, assets_icon0_png_len) != 0) {
+        int error = errno;
         printf("[APP_INSTALLER] Failed to write %s\n", icon_path);
+        ps5_notify("PKG Manager shortcut: icon0.png write failed (errno %d)", error);
         return -1;
     }
 
     int inst_err = install_app(title_id, "/user/app/");
     if (inst_err != 0) {
         printf("[APP_INSTALLER] install_app error: 0x%08X\n", inst_err);
+        ps5_notify("PKG Manager shortcut: install returned 0x%08X", inst_err);
         return -1;
     }
 
