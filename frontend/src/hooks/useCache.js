@@ -4,6 +4,7 @@ import { formatBytes } from '../utils/formatters';
 
 export function useCache(_ref) {
   var showToast = _ref.showToast;
+  var onRescan = _ref.onRescan;
   const [cacheStats, setCacheStats] = useState(null);
   const [loadingStats, setLoadingStats] = useState(false);
   const [showClearCacheModal, setShowClearCacheModal] = useState(false);
@@ -26,7 +27,10 @@ export function useCache(_ref) {
       if (data.success) {
         showToast('Cache cleared! Freed ' + formatBytes(data.freed_bytes) + '.', 'success');
         setShowClearCacheModal(false);
-        fetchCacheStats();
+        await Promise.all([
+          fetchCacheStats(),
+          onRescan ? onRescan() : Promise.resolve()
+        ]);
       } else {
         showToast(data.error || 'Failed to clear cache', 'error');
       }

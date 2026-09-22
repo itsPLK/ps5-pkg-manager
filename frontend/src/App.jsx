@@ -50,6 +50,8 @@ import ClearCacheModal from './components/modals/ClearCacheModal';
 import SmbShareModal from './components/modals/SmbShareModal';
 import DeleteLeftoverModal from './components/modals/DeleteLeftoverModal';
 
+const CACHE_VERSION_STORAGE_KEY = 'pkgmgr_cache_version';
+
 export default function App() {
   const [isOffline, setIsOffline] = useState(false);
   const [appVersion, setAppVersion] = useState('');
@@ -212,8 +214,10 @@ export default function App() {
         await fetchPackagesForDrive(selectedDriveRef.current, true);
       }
       showToast('Refreshed package catalog', 'success');
+      return true;
     } catch (err) {
       showToast('Error refreshing: ' + err.message, 'error');
+      return false;
     } finally {
       clearInterval(pollScanTimer);
       setScanStatus((prev) => ({ ...prev, is_scanning: false }));
@@ -226,7 +230,7 @@ export default function App() {
   const {
     cacheStats, loadingStats, showClearCacheModal, setShowClearCacheModal,
     clearingCache, fetchCacheStats, handleClearCache
-  } = useCache({ showToast });
+  } = useCache({ showToast, onRescan: refreshAll });
 
   const {
     settings, setSettings, showSettings, setShowSettings, showSmbPage, setShowSmbPage,
@@ -650,12 +654,39 @@ export default function App() {
 
     const checkOnline = async () => {
       let offline = false;
+      let versionRescanCompleted = false;
       try {
         const v = await checkVersion();
         if (!unmounted) {
           setAppVersion(v);
           setIsOffline(false);
           document.title = getBrowserTitle(v);
+        }
+
+        let previousVersion = null;
+        try {
+          previousVersion = localStorage.getItem(CACHE_VERSION_STORAGE_KEY);
+        } catch (e) {}
+
+        // A missing marker is the first launch for this browser; establish a
+        // baseline without discarding a cache whose version is unknown.
+        const versionChanged = Boolean(previousVersion && previousVersion !== v);
+        if (versionChanged && !unmounted) {
+          try {
+            const data = await clearCache();
+            if (!data || data.success !== true) {
+              throw new Error((data && data.error) || 'Cache clear failed');
+            }
+            versionRescanCompleted = await refreshAll();
+          } catch (err) {
+            showToast('Failed to refresh cache after update: ' + err.message, 'error');
+          }
+        }
+
+        // Keep the previous marker when migration failed so it is retried on
+        // the next startup instead of silently leaving a stale cache behind.
+        if (!versionChanged || versionRescanCompleted) {
+          try { localStorage.setItem(CACHE_VERSION_STORAGE_KEY, v); } catch (e) {}
         }
       } catch (err) {
         offline = true;
@@ -674,14 +705,16 @@ export default function App() {
       fetchStatus();
       fetchSettings();
 
-      if (selectedDriveRef.current) {
-        fetchPackagesForDrive(selectedDriveRef.current);
-      } else if (settings.all_sources_mode) {
-        setSelectedDrive(ALL_SOURCES_DRIVE);
-        fetchPackagesForDrive(ALL_SOURCES_DRIVE);
-      }
+      if (!versionRescanCompleted) {
+        if (selectedDriveRef.current) {
+          fetchPackagesForDrive(selectedDriveRef.current);
+        } else if (settings.all_sources_mode) {
+          setSelectedDrive(ALL_SOURCES_DRIVE);
+          fetchPackagesForDrive(ALL_SOURCES_DRIVE);
+        }
 
-      triggerQuickScan(selectedDriveRef.current);
+        triggerQuickScan(selectedDriveRef.current);
+      }
     };
 
     checkOnlineRef.current = checkOnline;
