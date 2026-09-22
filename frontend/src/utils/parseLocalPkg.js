@@ -91,6 +91,7 @@ export async function parseLocalPkg(file) {
     }
   }
   let category = '';
+  let hasPs4SfoCategory = false;
   for (const row of rows) {
     const end = stringTable && row.nameOffset < stringTable.length
       ? stringTable.indexOf(0, row.nameOffset) : -1;
@@ -106,7 +107,10 @@ export async function parseLocalPkg(file) {
       for (const key of ['title_name', 'title_id', 'app_version']) {
         if (!result[key]) result[key] = details[key];
       }
-      category = category || details.category;
+      if (!category && details.category) {
+        category = details.category;
+        hasPs4SfoCategory = true;
+      }
     } else if ((row.type === 0x1200 || name === 'icon0.png') && row.size > 8 && row.size < 10 * 1024 * 1024 && cnt + row.offset + row.size <= file.size) {
       const signature = await read(file, cnt + row.offset, 8);
       if (signature[0] === 0x89 && text(signature.subarray(1, 4)) === 'PNG') {
@@ -117,9 +121,13 @@ export async function parseLocalPkg(file) {
     if (row.type === 0x1008 || row.type === 0x0407 || row.type === 0x0408) result.pkg_type = 'update';
   }
   if (result.pkg_type !== 'update') {
-    if ((cntType & 0xff) === 1 && !result.has_base_app_metadata) result.pkg_type = 'dlc';
-    else if (category.startsWith('gp')) result.pkg_type = 'update';
+    if (category.startsWith('gp')) result.pkg_type = 'update';
     else if (category.startsWith('ac') || category.startsWith('al')) result.pkg_type = 'dlc';
+    else if (hasPs4SfoCategory && (category.startsWith('gd') || category.startsWith('bd') ||
+             category.startsWith('gc') || category.startsWith('wt'))) result.pkg_type = 'base';
+    else if ((cntType & 0xff) === 1 && !result.has_base_app_metadata) result.pkg_type = 'dlc';
+    else if (category.startsWith('gd') || category.startsWith('bd') ||
+             category.startsWith('gc') || category.startsWith('wt')) result.pkg_type = 'base';
   }
   if (!result.title_id) {
     const match = result.content_id.match(/-([^_]+)_/);

@@ -104,7 +104,7 @@ static int compare_pkg_by_title_name(const void *a, const void *b) {
 
 #define MAX_PACKAGES 4096
 #define MAX_DRIVES   16
-#define PKG_MANIFEST_VERSION 2
+#define PKG_MANIFEST_VERSION 3
 
 static pkg_detail_t g_packages[MAX_PACKAGES];
 static size_t g_package_count = 0;

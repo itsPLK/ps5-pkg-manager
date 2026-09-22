@@ -970,6 +970,7 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
     int has_playgo_chunk_patch = 0;
     int has_delta_patch = 0;
     int has_base_app_metadata = 0;
+    int has_ps4_sfo_category = 0;
 
     /* Iterate entries to find param.json, param.sfo, and icon0.png */
     for (uint32_t i = 0; i < entry_count; i++) {
@@ -1023,10 +1024,15 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
                     char stitle[PKG_TITLE_NAME_LEN] = {0};
                     char stid[PKG_TITLE_ID_LEN] = {0};
                     char sver[32] = {0};
+                    char sfo_category[sizeof(out->category)] = {0};
                     pkg_parser_parse_param_sfo(sfo_buf, data_sz, stitle, sizeof(stitle), stid, sizeof(stid), sver, sizeof(sver),
-                                                out->category, sizeof(out->category),
+                                                sfo_category, sizeof(sfo_category),
                                                 out->localized_titles, sizeof(out->localized_titles),
                                                 out->default_language, sizeof(out->default_language));
+                    if (sfo_category[0] != '\0' && out->category[0] == '\0') {
+                        has_ps4_sfo_category = 1;
+                        strncpy(out->category, sfo_category, sizeof(out->category) - 1);
+                    }
                     if (out->title_id[0] == '\0' && stid[0] != '\0') {
                         strncpy(out->title_id, stid, sizeof(out->title_id) - 1);
                     }
@@ -1059,20 +1065,20 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
     if (has_playgo_chunk_patch || has_delta_patch || is_delta_type ||
         (out->category[0] != '\0' && strncmp(out->category, "gp", 2) == 0)) {
         out->pkg_type = PKG_TYPE_UPDATE;
-    } else if ((cnt_type_magic & 0xFF) == 1 && !has_base_app_metadata) {
-        /* Some PS5 DLC metadata variants omit param.json.category and the
-         * normal application fields. The CNT field carries flags in its
-         * upper bytes, so only inspect its low-byte type after excluding a
-         * normal base-application param.json. */
+    } else if (strncmp(out->category, "ac", 2) == 0 || strncmp(out->category, "al", 2) == 0 ||
+               strcmp(out->category, "addcont") == 0) {
         out->pkg_type = PKG_TYPE_DLC;
-    } else if (out->category[0] != '\0') {
-        if (strncmp(out->category, "ac", 2) == 0 || strncmp(out->category, "al", 2) == 0 ||
-            strcmp(out->category, "addcont") == 0) {
-            out->pkg_type = PKG_TYPE_DLC;
-        } else if (strncmp(out->category, "gd", 2) == 0 || strncmp(out->category, "bd", 2) == 0 ||
-                   strncmp(out->category, "gc", 2) == 0 || strncmp(out->category, "wt", 2) == 0) {
-            out->pkg_type = PKG_TYPE_BASE;
-        }
+    } else if (has_ps4_sfo_category &&
+               (strncmp(out->category, "gd", 2) == 0 || strncmp(out->category, "bd", 2) == 0 ||
+                strncmp(out->category, "gc", 2) == 0 || strncmp(out->category, "wt", 2) == 0)) {
+        out->pkg_type = PKG_TYPE_BASE;
+    } else if ((cnt_type_magic & 0xFF) == 1 && !has_base_app_metadata) {
+        /* PS4 base packages can also have CNT type 1. A base category from
+         * param.sfo takes precedence; PS5 DLC variants may have JSON gd. */
+        out->pkg_type = PKG_TYPE_DLC;
+    } else if (strncmp(out->category, "gd", 2) == 0 || strncmp(out->category, "bd", 2) == 0 ||
+               strncmp(out->category, "gc", 2) == 0 || strncmp(out->category, "wt", 2) == 0) {
+        out->pkg_type = PKG_TYPE_BASE;
     }
 
     if (out->pkg_type == PKG_TYPE_UNKNOWN) {
@@ -1320,6 +1326,7 @@ int pkg_parser_parse_mem(const uint8_t *data, size_t data_len,
     int has_playgo_chunk_patch = 0;
     int has_delta_patch = 0;
     int has_base_app_metadata = 0;
+    int has_ps4_sfo_category = 0;
     for (uint32_t i = 0; i < entry_count; i++) {
         const uint8_t *e = entry_table + i * 32;
         uint32_t type = read_be32(e);
@@ -1397,11 +1404,16 @@ int pkg_parser_parse_mem(const uint8_t *data, size_t data_len,
                 char stitle[PKG_TITLE_NAME_LEN] = {0};
                 char stid[PKG_TITLE_ID_LEN] = {0};
                 char sver[32] = {0};
+                char sfo_category[sizeof(out->category)] = {0};
                 char sloc[PKG_LOCALIZED_TITLES_LEN] = {0};
                 char slang[PKG_DEFAULT_LANG_LEN] = {0};
                 pkg_parser_parse_param_sfo(sb, data_sz, stitle, sizeof(stitle), stid, sizeof(stid), sver, sizeof(sver),
-                                out->category, sizeof(out->category),
+                                sfo_category, sizeof(sfo_category),
                                 sloc, sizeof(sloc), slang, sizeof(slang));
+                if (sfo_category[0] != '\0' && out->category[0] == '\0') {
+                    has_ps4_sfo_category = 1;
+                    strncpy(out->category, sfo_category, sizeof(out->category) - 1);
+                }
                 if (out->title_id[0] == '\0' && stid[0] != '\0') {
                     strncpy(out->title_id, stid, sizeof(out->title_id) - 1);
                 }
@@ -1427,16 +1439,18 @@ int pkg_parser_parse_mem(const uint8_t *data, size_t data_len,
     if (has_playgo_chunk_patch || has_delta_patch || is_delta_type ||
         (out->category[0] != '\0' && strncmp(out->category, "gp", 2) == 0)) {
         out->pkg_type = PKG_TYPE_UPDATE;
+    } else if (strncmp(out->category, "ac", 2) == 0 || strncmp(out->category, "al", 2) == 0 ||
+               strcmp(out->category, "addcont") == 0) {
+        out->pkg_type = PKG_TYPE_DLC;
+    } else if (has_ps4_sfo_category &&
+               (strncmp(out->category, "gd", 2) == 0 || strncmp(out->category, "bd", 2) == 0 ||
+                strncmp(out->category, "gc", 2) == 0 || strncmp(out->category, "wt", 2) == 0)) {
+        out->pkg_type = PKG_TYPE_BASE;
     } else if ((cnt_type_magic & 0xFF) == 1 && !has_base_app_metadata) {
         out->pkg_type = PKG_TYPE_DLC;
-    } else if (out->category[0] != '\0') {
-        if (strncmp(out->category, "ac", 2) == 0 || strncmp(out->category, "al", 2) == 0 ||
-            strcmp(out->category, "addcont") == 0) {
-            out->pkg_type = PKG_TYPE_DLC;
-        } else if (strncmp(out->category, "gd", 2) == 0 || strncmp(out->category, "bd", 2) == 0 ||
-                   strncmp(out->category, "gc", 2) == 0 || strncmp(out->category, "wt", 2) == 0) {
-            out->pkg_type = PKG_TYPE_BASE;
-        }
+    } else if (strncmp(out->category, "gd", 2) == 0 || strncmp(out->category, "bd", 2) == 0 ||
+               strncmp(out->category, "gc", 2) == 0 || strncmp(out->category, "wt", 2) == 0) {
+        out->pkg_type = PKG_TYPE_BASE;
     }
 
     if (out->pkg_type == PKG_TYPE_UNKNOWN) {

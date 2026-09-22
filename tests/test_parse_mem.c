@@ -63,13 +63,21 @@ static void test_ps5_mem(void) {
 static void test_ps4_mem(void) {
     const char *p = PM_DIR "/ps4.pkg";
     assert(fixture_write_ps4_pkg(p, "CUSA90013", "MemFour", "gd", "01.00") == 0);
+    FILE *f = fopen(p, "r+b");
+    assert(f);
+    assert(fseek(f, 4, SEEK_SET) == 0);
+    const unsigned char cnt_type_one[] = {0, 0, 0, 1};
+    assert(fwrite(cnt_type_one, 1, sizeof(cnt_type_one), f) == sizeof(cnt_type_one));
+    fclose(f);
     pkg_detail_t file_d;
     assert(pkg_parser_parse(p, &file_d) == 0);
+    assert(file_d.pkg_type == PKG_TYPE_BASE);
     size_t len = 0;
     uint8_t *buf = read_file(p, &len);
     pkg_detail_t mem_d;
     assert(pkg_parser_parse_mem(buf, len, len, "MemFour.pkg", &mem_d, NULL) == 0);
     expect_equal(&file_d, &mem_d, "ps4");
+    assert(mem_d.pkg_type == PKG_TYPE_BASE);
     free(buf);
 }
 

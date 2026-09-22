@@ -3,8 +3,8 @@
 
 /* Bump when persisted package metadata semantics change and cached package
  * records must be reparsed. */
-#define PKG_CACHE_FORMAT_VERSION 2
-#define PKG_CACHE_FORMAT_TAG "pkg-cache-v2"
+#define PKG_CACHE_FORMAT_VERSION 3
+#define PKG_CACHE_FORMAT_TAG "pkg-cache-v3"
 
 #include <stdint.h>
 #include <stddef.h>

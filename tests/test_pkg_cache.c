@@ -196,6 +196,14 @@ int main(void) {
     system("rm -rf /tmp/test_cache_fixtures && mkdir -p /tmp/test_cache_fixtures");
     assert(fixture_write_ps4_pkg("/tmp/test_cache_fixtures/bq_base.pkg",
                                  "CUSA90002", "BounceQuest", "gd", "01.00") == 0);
+    {
+        FILE *f = fopen("/tmp/test_cache_fixtures/bq_base.pkg", "r+b");
+        assert(f);
+        assert(fseek(f, 4, SEEK_SET) == 0);
+        const unsigned char cnt_type_one[] = {0, 0, 0, 1};
+        assert(fwrite(cnt_type_one, 1, sizeof(cnt_type_one), f) == sizeof(cnt_type_one));
+        fclose(f);
+    }
     assert(fixture_write_ps5_pkg("/tmp/test_cache_fixtures/wc.pkg",
                                  "PPSA90012", "WaveCast", "gd", "01.003.000", 1) == 0);
     {
@@ -206,6 +214,7 @@ int main(void) {
         assert(strcmp(smb_detail.title_id, "CUSA90002") == 0);
         assert(strcmp(smb_detail.title_name, "BounceQuest") == 0);
         assert(strcmp(smb_detail.app_version, "v01.00") == 0);
+        assert(strcmp(smb_detail.category, "gd") == 0);
         assert(smb_detail.pkg_type == PKG_TYPE_BASE);
 
         memset(&smb_detail, 0, sizeof(smb_detail));

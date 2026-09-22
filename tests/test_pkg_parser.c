@@ -7,9 +7,9 @@
 #include "multipart.h"
 #include "test_fixture.h"
 
-int main(void) {
-    /* All fixtures are generated synthetically (fictional IDs/titles) so
-     * this test never needs external files. */
+int main(int argc, char **argv) {
+    /* Default fixtures are synthetic; a real package can be passed as an
+     * optional regression check. */
     system("rm -rf /tmp/test_parser_fixtures && mkdir -p /tmp/test_parser_fixtures");
     assert(fixture_write_ps5_pkg("/tmp/test_parser_fixtures/nv.pkg",
                                  "PPSA90011", "NebulaView", "gd", "06.000.000", 1) == 0);
@@ -93,6 +93,18 @@ int main(void) {
     assert(detail3.pkg_type == PKG_TYPE_BASE);
     assert(strcmp(detail3.pkg_type_str, "base") == 0);
     assert(strcmp(detail3.category, "gd") == 0);
+
+    /* PS4 base packages may use CNT type 1 even with CATEGORY=gd. */
+    FILE *base_file = fopen(pkg3, "r+b");
+    assert(base_file != NULL);
+    assert(fseek(base_file, 4, SEEK_SET) == 0);
+    const uint8_t cnt_type_one[4] = {0, 0, 0, 1};
+    assert(fwrite(cnt_type_one, 1, sizeof(cnt_type_one), base_file) == sizeof(cnt_type_one));
+    fclose(base_file);
+    assert(pkg_parser_parse(pkg3, &detail3) == 0);
+    assert(strcmp(detail3.category, "gd") == 0);
+    assert(detail3.pkg_type == PKG_TYPE_BASE);
+    assert(strcmp(detail3.pkg_type_str, "base") == 0);
 
     /* 4. PS4 Update (v01.06) */
     const char *pkg4 = "/tmp/test_parser_fixtures/bq_upd.pkg";
@@ -207,6 +219,16 @@ int main(void) {
     assert(pkg_parser_resolve_localized_title(mldetail.localized_titles, mldetail.default_language,
                                               "fr-FR,fr;q=0.9", resolved, sizeof(resolved)) == 0);
     assert(strcmp(resolved, "English Title") == 0);
+
+    /* Optional real-world regression fixture, supplied by the caller. */
+    if (argc > 1) {
+        pkg_detail_t reference;
+        assert(pkg_parser_parse(argv[1], &reference) == 0);
+        assert(strcmp(reference.category, "gd") == 0);
+        assert(reference.pkg_type == PKG_TYPE_BASE);
+        assert(strcmp(reference.pkg_type_str, "base") == 0);
+        printf("Reference package classified as base: %s\n", argv[1]);
+    }
 
     printf("\n>>> ALL PKG PARSER TESTS (6 PACKAGES + MULTIPART TYPES + MULTILANG) PASSED! <<<\n");
     return 0;
