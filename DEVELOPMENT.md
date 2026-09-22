@@ -34,8 +34,8 @@ docker run --rm -v $(pwd):/src -w /src ps5-payload-sdk-pkgmgr make clean all
 
 The resulting `pkgmgr.elf` will be created in the root directory.
 
-### 4. Build a Versioned Release
-To build a versioned release binary (`pkgmgr_v<VERSION>.elf`):
+### 4. Build a Versioned Development Binary
+To build a versioned development binary (`pkg-manager_v<VERSION>-dev-<SHORT_HASH>.elf`):
 ```bash
 ./build_release.sh
 ```

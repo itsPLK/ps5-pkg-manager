@@ -11,7 +11,13 @@ if [ -z "$VERSION" ]; then
     exit 1
 fi
 
-OUTPUT_ELF="pkgmgr_v${VERSION}.elf"
+SHORT_HASH=$(git rev-parse --short HEAD 2>/dev/null || true)
+if [ -z "$SHORT_HASH" ]; then
+    echo "Error: Could not determine the current Git commit"
+    exit 1
+fi
+
+OUTPUT_ELF="pkg-manager_v${VERSION}-dev-${SHORT_HASH}.elf"
 IMAGE_NAME="ps5-payload-sdk-pkgmgr"
 
 echo "--- Building PKG Manager v$VERSION ---"

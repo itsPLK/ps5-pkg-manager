@@ -121,7 +121,7 @@ $(ELF): $(ASSET_HEADERS) $(LIBSMB2) $(SRCS) $(SRCS_WS)
 	$(STRIP) $(ELF)
 
 clean:
-	rm -f $(ELF) pkgmgr_v*.elf $(ASSET_HEADERS) src/*.o $(addprefix tests/,$(TESTS))
+	rm -f $(ELF) pkgmgr_v*.elf pkg-manager_v*.elf $(ASSET_HEADERS) src/*.o $(addprefix tests/,$(TESTS))
 	rm -rf $(addprefix tests/,$(addsuffix .dSYM,$(TESTS)))
 
 test: $(PARAM_JSON_HEADER) $(ICON0_PNG_HEADER)
