@@ -83,9 +83,6 @@ void stream_debug_log_close(void);
 /* Returns non-zero when a debug log session is currently active. */
 int stream_debug_log_is_active(void);
 
-/* Persist an installer/helper diagnostic in the same timeline as HTTP/WS. */
-void stream_debug_log_event(const char *message);
-
 #ifdef __cplusplus
 }
 #endif

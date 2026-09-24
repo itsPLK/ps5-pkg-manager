@@ -107,7 +107,7 @@ static int open_service(install_service_t *service, install_service_canceled_fn 
     install_log("[HELPER] spawned; waiting for AppInstUtil initialization");
     install_ipc_response_t response = {0};
     int ret = receive_response(service, INSTALL_IPC_READY, &response, 30000);
-    dump_helper_log();
+    if (ret != 0) dump_helper_log();
     if (ret == 0) {
         service->usable = 1;
         service->pid = response.pid;
@@ -143,7 +143,7 @@ void install_service_close(install_service_t *service) {
                     install_log("[HELPER] reaped pid=%d wait_status=0x%X exit=%d signal=%d",
                                 (int)service->pid, status, WIFEXITED(status) ? WEXITSTATUS(status) : -1,
                                 WIFSIGNALED(status) ? WTERMSIG(status) : 0);
-                    dump_helper_log();
+                    if (status != 0) dump_helper_log();
                     goto reaped;
                 }
                 install_log("[HELPER] waitpid reported stopped pid=%d status=0x%X",
@@ -152,7 +152,6 @@ void install_service_close(install_service_t *service) {
             if (ret < 0 && errno == ECHILD) {
                 if (kill(service->pid, 0) < 0 && errno == ESRCH) {
                     install_log("[HELPER] reaped pid=%d (ESRCH)", (int)service->pid);
-                    dump_helper_log();
                     goto reaped;
                 }
             }
@@ -212,7 +211,7 @@ int install_service_status(install_service_t *service,
     if (!service->have_status || ret != service->last_status_result ||
         response.status.error_info.error_code != service->last_native_error ||
         strncmp(response.status.status, service->last_status, sizeof(service->last_status)) != 0 ||
-        now - service->last_status_log_ms >= 5000) {
+        now - service->last_status_log_ms >= 30000) {
         service->have_status = 1;
         service->last_status_result = ret;
         service->last_native_error = response.status.error_info.error_code;

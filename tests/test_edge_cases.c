@@ -677,7 +677,6 @@ static void test_stream_debug_logging(void) {
 
     assert(stream_debug_log_open("PPSA77777", "EP0001-PPSA77777_00-0000000000000000", "update", fix_path, 65837) == 0);
     assert(stream_debug_log_is_active() == 1);
-    install_log("[HELPER_LAUNCH] diagnostic before retry");
 
     /* 2. Client 1: Range request */
     int sock1 = tcp_connect_stream_server();
@@ -718,13 +717,18 @@ static void test_stream_debug_logging(void) {
     while (recv(sock3, buf3, sizeof(buf3), 0) > 0) {}
     close(sock3);
 
-    /* Retry/cancel can stop transport while helper cleanup still needs to be
-     * recorded in the original report. A restart must preserve that report. */
+    /* A retry must preserve the stream report across transport restarts. */
     stream_server_session_stop_keep_log();
     assert(stream_debug_log_is_active() == 1);
-    install_log("[HELPER] diagnostic during cleanup");
     assert(stream_server_session_start_ex(fix_path, "package-retry.pkg") == 0);
-    install_log("[HELPER] diagnostic after retry");
+    int retry_sock = tcp_connect_stream_server();
+    assert(retry_sock >= 0);
+    const char *retry_req = "HEAD /stream/install/package-retry.pkg HTTP/1.1\r\n"
+                            "Host: 127.0.0.1:18841\r\nConnection: close\r\n\r\n";
+    assert(send(retry_sock, retry_req, strlen(retry_req), 0) == (ssize_t)strlen(retry_req));
+    char retry_buf[512];
+    while (recv(retry_sock, retry_buf, sizeof(retry_buf), 0) > 0) {}
+    close(retry_sock);
 
     /* 5. Stop session and close debug log */
     stream_server_session_stop();
@@ -774,10 +778,8 @@ static void test_stream_debug_logging(void) {
     assert(strstr(log_content, "CONN_CLOSE") != NULL);
     assert(strstr(log_content, "404") != NULL);
     assert(strstr(log_content, "# Session ended") != NULL);
-    assert(strstr(log_content, "INSTALL_EVENT") != NULL);
-    assert(strstr(log_content, "diagnostic before retry") != NULL);
-    assert(strstr(log_content, "diagnostic during cleanup") != NULL);
-    assert(strstr(log_content, "diagnostic after retry") != NULL);
+    assert(strstr(log_content, "package-retry.pkg") != NULL);
+    assert(strstr(log_content, "INSTALL_EVENT") == NULL);
 
     /* Clean up */
     unlink(found_file);

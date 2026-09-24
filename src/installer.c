@@ -192,8 +192,7 @@ static void cleanup_tmp_dir(const char *dir_path) {
     closedir(d);
 }
 
-/* Retain 32 times the previous history so verbose reports cover multiple
- * install attempts. This fixed ring uses at most 32 MiB. */
+/* Keep recent diagnostics without reserving tens of MiB in the daemon. */
 #define MAX_LOG_LINES INSTALL_LOG_MAX_LINES
 #define MAX_LOG_LINE_LEN 512
 #define MAX_LOG_FILE_SIZE (128 * 1024)
@@ -374,10 +373,6 @@ void install_log(const char *fmt, ...) {
     strncpy(path_copy, s_log_file_path, sizeof(path_copy) - 1);
     path_copy[sizeof(path_copy) - 1] = '\0';
     pthread_mutex_unlock(&s_log_mutex);
-
-    /* Detailed debug reports include successful transitions too. The normal
-     * persistent log below keeps its existing warning/error filtering. */
-    stream_debug_log_event(buf);
 
     /* 3. Reduce logging to file: only persist errors and warnings if file path is active */
     if (path_copy[0] != '\0' && is_log_warning_or_error(buf)) {

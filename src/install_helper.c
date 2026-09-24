@@ -84,18 +84,15 @@ static int register_shortcut(const char *title_id, const char *directory) {
 }
 
 int install_helper_serve(int fd) {
-    helper_phase_log("[HELPER] serve: starting fd=%d\n", fd);
     signal(SIGPIPE, SIG_IGN);
     parent_watch_t watch = {.fd = fd};
     atomic_init(&watch.done, 0);
     pthread_t watcher;
-    helper_phase_log("[HELPER] serve: creating watch_parent thread...\n");
     if (pthread_create(&watcher, NULL, watch_parent, &watch) != 0) {
         helper_phase_log("[HELPER] serve: pthread_create failed errno=%d (%s)\n", errno, strerror(errno));
         close(fd);
         return 1;
     }
-    helper_phase_log("[HELPER] serve: watcher thread created ok\n");
     int64_t began = install_ipc_now_ms();
     errno = 0;
     helper_phase_log("[HELPER] serve: calling sceAppInstUtilInitialize()...\n");
@@ -118,21 +115,16 @@ int install_helper_serve(int fd) {
     install_ipc_request_t install_request;
     pkg_metadata_t metadata = {0};
     playgo_info_t playgo = {0};
-    helper_phase_log("[HELPER] serve: sending INSTALL_IPC_READY (bytes=%zu)...\n", sizeof(response));
     int tr_res = install_ipc_transfer(fd, &response, sizeof(response), 1, 10000, NULL);
-    helper_phase_log("[HELPER] serve: send READY result=%d\n", tr_res);
+    if (tr_res != 0) helper_phase_log("[HELPER] send READY failed result=%d\n", tr_res);
     if (tr_res != 0 || initialized != 0)
         goto done;
 
-    helper_phase_log("[HELPER] serve: entering request loop\n");
     for (;;) {
         install_ipc_request_t request;
-        helper_phase_log("[HELPER] serve: waiting for request (timeout 120s)...\n");
         if (install_ipc_transfer(fd, &request, sizeof(request), 0, 120000, NULL) != 0) {
-            helper_phase_log("[HELPER] serve: request transfer error, breaking\n");
             break;
         }
-        helper_phase_log("[HELPER] serve: got request op=%d magic=0x%X\n", (int)request.op, (unsigned)request.magic);
         if (request.magic != INSTALL_IPC_MAGIC || request.version != INSTALL_IPC_VERSION ||
             !memchr(request.uri, 0, sizeof(request.uri)) ||
             !memchr(request.name, 0, sizeof(request.name)) ||
@@ -255,7 +247,7 @@ int main(int argc, char **argv) {
         _exit(2);
     }
 
-    helper_phase_log("[HELPER] connected to IPC! Calling install_helper_serve...\n");
+    helper_phase_log("[HELPER] connected to IPC\n");
     int ret = install_helper_serve(sock);
     helper_phase_log("[HELPER] install_helper_serve returned %d, exiting\n", ret);
     close(sock);

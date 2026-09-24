@@ -65,23 +65,6 @@ static void dbglog_write(const char *line) {
     fflush(g_dbglog_fp);
 }
 
-void stream_debug_log_event(const char *message) {
-    if (!message) return;
-    pthread_mutex_lock(&g_dbglog_mutex);
-    if (g_dbglog_fp) {
-        char clean[512];
-        snprintf(clean, sizeof(clean), "%s", message);
-        for (char *p = clean; *p; ++p) {
-            if (*p == '\n' || *p == '\r' || *p == '\t') *p = ' ';
-        }
-        char line[600];
-        snprintf(line, sizeof(line), "%llu\tINSTALL_EVENT\t-\t-\t-\t%s\n",
-                 (unsigned long long)dbglog_elapsed_ms(), clean);
-        dbglog_write(line);
-    }
-    pthread_mutex_unlock(&g_dbglog_mutex);
-}
-
 /* Caller holds g_dbglog_mutex. Upload events are batched to keep the debug
  * file useful without writing and flushing once for every 1 MiB segment. */
 static void dbglog_write_ws_sample(uint64_t now) {
@@ -293,7 +276,6 @@ int stream_debug_log_open(const char *title_id, const char *content_id,
              "# Fields: elapsed_ms \\t event_type \\t conn_id \\t req_no \\t peer \\t details...\n"
              "#\n"
              "# Event types:\n"
-             "#   INSTALL_EVENT - Installer/helper lifecycle, IPC and native service diagnostics\n"
              "#   CONN_OPEN    - New TCP connection accepted\n"
              "#   REQUEST      - HTTP request received and response sent\n"
              "#   BODY_DONE    - Response body fully/partially delivered\n"

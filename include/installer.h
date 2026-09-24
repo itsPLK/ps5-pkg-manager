@@ -1,8 +1,8 @@
 #ifndef INSTALLER_H
 #define INSTALLER_H
 
-/* 32 MiB maximum retained history for remote diagnostics via /api/log. */
-#define INSTALL_LOG_MAX_LINES 65536
+/* Up to 1 MiB of recent history for /api/log (2,048 lines x 512 bytes). */
+#define INSTALL_LOG_MAX_LINES 2048
 
 #include <stdint.h>
 #include <time.h>
