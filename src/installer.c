@@ -6,6 +6,7 @@
  */
 
 #include "installer.h"
+#include "install_service.h"
 #include "pkg_parser.h"
 #include "pkg_scanner.h"
 #include "multipart.h"
@@ -32,54 +33,6 @@
 #include <ctype.h>
 #include <strings.h>
 
-#if defined(__Prospero__) || defined(PS5_BUILD)
-typedef struct pkg_metadata {
-    const char *uri;
-    const char *ex_uri;
-    const char *playgo_scenario_id;
-    const char *content_id;
-    const char *content_name;
-    const char *icon_url;
-} pkg_metadata_t;
-
-typedef struct pkg_info {
-    char content_id[48];
-    int type;
-    int platform;
-} pkg_info_t;
-
-typedef struct playgo_info {
-    char languages[30][8];
-    char playgo_scenario_ids[64][3];
-    char content_ids[64][48];
-    unsigned char unknown[6480];
-} playgo_info_t;
-
-typedef struct {
-    int32_t error_code;
-    int32_t version;
-    char description[512];
-    char type[9];
-} SceAppInstallErrorInfo;
-
-typedef struct {
-    char status[16];
-    char src_type[8];
-    uint32_t remain_time;
-    uint64_t downloaded_size;
-    uint64_t initial_chunk_size;
-    uint64_t total_size;
-    uint32_t promote_progress;
-    SceAppInstallErrorInfo error_info;
-    int32_t local_copy_percent;
-    bool is_copy_only;
-} SceAppInstallStatusInstalled;
-
-extern int sceAppInstUtilInitialize(void);
-extern int sceAppInstUtilTerminate(void);
-extern int sceAppInstUtilInstallByPackage(const pkg_metadata_t *meta, pkg_info_t *info, playgo_info_t *playgo);
-extern int sceAppInstUtilGetInstallStatus(const char* content_id, SceAppInstallStatusInstalled* status);
-#endif
 
 static installer_status_t g_status;
 static pthread_mutex_t g_installer_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -239,10 +192,9 @@ static void cleanup_tmp_dir(const char *dir_path) {
     closedir(d);
 }
 
-/* Maximum in-memory log history: 2048 lines of up to 512 bytes
- * (temporarily raised from 256 so verbose stream-server diagnostics
- * survive a full install without rolling off /api/log). */
-#define MAX_LOG_LINES 2048
+/* Retain 32 times the previous history so verbose reports cover multiple
+ * install attempts. This fixed ring uses at most 32 MiB. */
+#define MAX_LOG_LINES INSTALL_LOG_MAX_LINES
 #define MAX_LOG_LINE_LEN 512
 #define MAX_LOG_FILE_SIZE (128 * 1024)
 #define DEFAULT_LOG_FILE_PATH "/data/pkgmgr/install.log"
@@ -422,6 +374,10 @@ void install_log(const char *fmt, ...) {
     strncpy(path_copy, s_log_file_path, sizeof(path_copy) - 1);
     path_copy[sizeof(path_copy) - 1] = '\0';
     pthread_mutex_unlock(&s_log_mutex);
+
+    /* Detailed debug reports include successful transitions too. The normal
+     * persistent log below keeps its existing warning/error filtering. */
+    stream_debug_log_event(buf);
 
     /* 3. Reduce logging to file: only persist errors and warnings if file path is active */
     if (path_copy[0] != '\0' && is_log_warning_or_error(buf)) {
@@ -713,6 +669,12 @@ static const char *installer_strerror(int code) {
     if (code == 0) {
         return "OK";
     }
+    switch (code) {
+    case INSTALL_SERVICE_UNAVAILABLE: return "INSTALL_HELPER_UNAVAILABLE";
+    case INSTALL_SERVICE_DISCONNECTED: return "INSTALL_HELPER_DISCONNECTED";
+    case INSTALL_SERVICE_CANCELED: return "INSTALL_HELPER_CANCELED";
+    case INSTALL_SERVICE_TIMEOUT: return "INSTALL_HELPER_TIMEOUT";
+    }
     switch ((uint32_t)code) {
     case 0x80A30001u: return "APP_INSTALLER_ERROR_UNKNOWN";
     case 0x80A30002u: return "APP_INSTALLER_ERROR_NOSPACE";
@@ -732,6 +694,10 @@ static const char *installer_strerror(int code) {
 /* Slot-family errors are transient (e.g. patch installed while the system
    still finalizes the base): safe to retry with a fresh session. Anything
    else, including PARAM, fails immediately. */
+static int install_request_canceled(void) {
+    return g_cancel_stream || !g_monitor_running;
+}
+
 static int is_transient_slot_error(int code) {
     uint32_t c = (uint32_t)code;
     return c == 0x80B2116Fu || c == 0x80B2100Du || c == 0x80B2100Eu;
@@ -751,6 +717,26 @@ static void *stream_installer_worker(void *arg) {
     worker_is_multipart = g_status.is_multipart;
     pthread_mutex_unlock(&g_installer_mutex);
 
+    /* Activate stream debug file logging if the setting is enabled.
+     * Open before validation/launch so early failures are captured too. */
+    {
+        app_settings_t dbg_settings;
+        pkg_cache_get_settings(&dbg_settings);
+        if (dbg_settings.pkg_install_debug) {
+            char dbg_tid[32] = {0}, dbg_cid[64] = {0}, dbg_kind[16] = {0};
+            uint64_t dbg_total = 0;
+            pthread_mutex_lock(&g_installer_mutex);
+            strncpy(dbg_tid, g_status.title_id, sizeof(dbg_tid) - 1);
+            strncpy(dbg_cid, g_status.content_id, sizeof(dbg_cid) - 1);
+            strncpy(dbg_kind, g_status.pkg_kind, sizeof(dbg_kind) - 1);
+            dbg_total = g_status.total_bytes;
+            pthread_mutex_unlock(&g_installer_mutex);
+            stream_debug_log_open(dbg_tid, dbg_cid, dbg_kind, worker_pkg_path, dbg_total);
+            /* Also enable verbose stream_server console logging when debug is active */
+            stream_server_set_debug(1);
+        }
+    }
+
     multipart_header_t hdr1;
     memset(&hdr1, 0, sizeof(hdr1));
     uint32_t total_parts = 1;
@@ -764,8 +750,10 @@ static void *stream_installer_worker(void *arg) {
             g_status.error_code = -20;
             strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
             snprintf(g_status.prompt_message, sizeof(g_status.prompt_message), "Failed to read header of Part 1");
+            g_pending_pkg_path[0] = '\0';
             pthread_mutex_unlock(&g_installer_mutex);
             install_log("[INSTALLER] Failed to read header of Part 1: %s", worker_pkg_path);
+            stream_debug_log_close();
             return NULL;
         }
 
@@ -777,7 +765,10 @@ static void *stream_installer_worker(void *arg) {
             g_status.error_code = -25;
             strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
             snprintf(g_status.prompt_message, sizeof(g_status.prompt_message), "Invalid total parts count (%u)", total_parts);
+            g_pending_pkg_path[0] = '\0';
+            install_log("[INSTALLER] Invalid total parts count (%u)", total_parts);
             pthread_mutex_unlock(&g_installer_mutex);
+            stream_debug_log_close();
             return NULL;
         }
 
@@ -805,8 +796,8 @@ static void *stream_installer_worker(void *arg) {
         strncat(clean_pkg_name, ".pkg", sizeof(clean_pkg_name) - strlen(clean_pkg_name) - 1);
     }
 
-    /* Display name for the system installer UI. Static storage: ShellCore
-       may read meta strings after return. STREAM_NAME_OVERRIDE (build-time
+    /* Display name for the system installer UI. The helper retains a copy
+       for the native session's lifetime. STREAM_NAME_OVERRIDE (build-time
        -D) pins one literal for A/B runs; otherwise title ID + kind +
        version, which never contains the package title. */
     static char disp_name[320];
@@ -851,30 +842,12 @@ static void *stream_installer_worker(void *arg) {
         g_status.error_code = -23;
         strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
         snprintf(g_status.prompt_message, sizeof(g_status.prompt_message), "Failed to start virtual stream session");
+        g_pending_pkg_path[0] = '\0';
         pthread_mutex_unlock(&g_installer_mutex);
         ps5_notify("Failed to start virtual stream!");
         install_log("[INSTALLER] Failed to start stream session for %s", worker_pkg_path);
+        stream_debug_log_close();
         return NULL;
-    }
-
-    /* Activate stream debug file logging if the setting is enabled.
-     * Opens after the stream server is up so total_size is finalized. */
-    {
-        app_settings_t dbg_settings;
-        pkg_cache_get_settings(&dbg_settings);
-        if (dbg_settings.pkg_install_debug) {
-            char dbg_tid[32] = {0}, dbg_cid[64] = {0}, dbg_kind[16] = {0};
-            uint64_t dbg_total = 0;
-            pthread_mutex_lock(&g_installer_mutex);
-            strncpy(dbg_tid, g_status.title_id, sizeof(dbg_tid) - 1);
-            strncpy(dbg_cid, g_status.content_id, sizeof(dbg_cid) - 1);
-            strncpy(dbg_kind, g_status.pkg_kind, sizeof(dbg_kind) - 1);
-            dbg_total = g_status.total_bytes;
-            pthread_mutex_unlock(&g_installer_mutex);
-            stream_debug_log_open(dbg_tid, dbg_cid, dbg_kind, worker_pkg_path, dbg_total);
-            /* Also enable verbose stream_server console logging when debug is active */
-            stream_server_set_debug(1);
-        }
     }
 
     /* Unique URI per install: the system remembers recently used stream URLs
@@ -894,6 +867,15 @@ static void *stream_installer_worker(void *arg) {
     }
 
     pthread_mutex_lock(&g_installer_mutex);
+    if (g_cancel_stream || !g_monitor_running) {
+        g_pending_pkg_path[0] = '\0';
+        pthread_mutex_unlock(&g_installer_mutex);
+        install_log("[INSTALLER] Canceled before helper launch");
+        ws_live_abort();
+        stream_server_session_stop();
+        ws_live_destroy();
+        return NULL;
+    }
     g_status.waiting_for_disc = 0;
     strncpy(g_status.status_str, "transferring", sizeof(g_status.status_str) - 1);
     snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
@@ -910,19 +892,10 @@ static void *stream_installer_worker(void *arg) {
                 stream_uri, disp_name, (unsigned long long)hdr1.total_pkg_size, total_parts);
 
 #if defined(__Prospero__) || defined(PS5_BUILD)
-    pkg_metadata_t meta;
-    memset(&meta, 0, sizeof(meta));
-    meta.uri = stream_uri;
-    meta.ex_uri = "";
-    meta.playgo_scenario_id = "";
-    meta.content_id = "";
-    meta.content_name = disp_name;
-    meta.icon_url = "";
+    install_service_t service = INSTALL_SERVICE_INIT;
+    pkg_info_t info = {0};
 
-    pkg_info_t info;
-    playgo_info_t playgo;
-
-    /* Slot-family errors are transient: retry with a fresh session + URI
+    /* Retry slot-family errors with a fresh helper process and stream URI
        (initial try, then after 2s, then after 5s). Anything else, including
        PARAM, fails immediately. Waits abort promptly on cancel/shutdown. */
     static const int retry_delays[] = { 0, 2, 5 };
@@ -930,6 +903,7 @@ static void *stream_installer_worker(void *arg) {
     const char *rname = NULL;
     for (int attempt = 0; attempt < 3 && !g_cancel_stream; attempt++) {
         if (attempt > 0) {
+            install_service_close(&service);
             int wait_s = retry_delays[attempt];
             install_log("[INSTALLER] Transient installer error 0x%08X, retrying in %ds (attempt %d/3)...",
                         ret, wait_s, attempt + 1);
@@ -943,7 +917,7 @@ static void *stream_installer_worker(void *arg) {
             if (g_cancel_stream || !g_monitor_running) {
                 break;
             }
-            stream_server_session_stop();
+            stream_server_session_stop_keep_log();
             if (stream_server_session_start(worker_pkg_path) != 0) {
                 install_log("[INSTALLER] Stream server restart failed; keeping last error");
                 break;
@@ -954,15 +928,14 @@ static void *stream_installer_worker(void *arg) {
                 const char *slash = strrchr(stream_uri, '/');
                 stream_server_set_session_name(slash ? slash + 1 : stream_uri);
             }
-            meta.uri = stream_uri;
-            memset(&info, 0, sizeof(info));
-            memset(&playgo, 0, sizeof(playgo));
+
             install_log("[INSTALLER] Retry stream install: URI='%s'", stream_uri);
         }
-        ret = sceAppInstUtilInstallByPackage(&meta, &info, &playgo);
+        ret = install_service_start(&service, stream_uri, disp_name, &info,
+                                    install_request_canceled);
         rname = installer_strerror(ret);
-        install_log("[INSTALLER] sceAppInstUtilInstallByPackage returned 0x%08X (%s), content_id='%s'",
-                    ret, rname ? rname : "unknown", info.content_id);
+        install_log("[INSTALLER] Helper pid=%d install returned 0x%08X (%s), content_id='%s'",
+                    (int)service.pid, ret, rname ? rname : "unknown", info.content_id);
         if (ret == 0 || !is_transient_slot_error(ret)) {
             break;
         }
@@ -972,6 +945,11 @@ static void *stream_installer_worker(void *arg) {
     if (g_cancel_stream || !g_monitor_running) {
         /* Canceled or shutting down during retry waits: cancel/shutdown owns
            the status, just stop the server and exit. */
+        install_log("[INSTALLER] Stopping helper after cancel/shutdown");
+        pthread_mutex_lock(&g_installer_mutex);
+        g_pending_pkg_path[0] = '\0';
+        pthread_mutex_unlock(&g_installer_mutex);
+        install_service_close(&service);
         ws_live_abort();
         stream_server_session_stop();
         ws_live_destroy();
@@ -984,7 +962,11 @@ static void *stream_installer_worker(void *arg) {
         g_status.failed = 1;
         g_status.error_code = ret;
         strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
+        snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                 "Install failed: %s (0x%08X)", rname ? rname : "unknown", (unsigned)ret);
+        g_pending_pkg_path[0] = '\0';
         pthread_mutex_unlock(&g_installer_mutex);
+        install_service_close(&service);
         ps5_notify("Install error: 0x%08X (%s)", ret, rname ? rname : "unknown");
         ws_live_abort();
         stream_server_session_stop();
@@ -1024,11 +1006,28 @@ static void *stream_installer_worker(void *arg) {
         pthread_mutex_unlock(&g_installer_mutex);
         if (!keep_going) break;
 
-        /* Check system installer status if content_id is available */
-        if (info.content_id[0] != '\0') {
+        /* Always poll the helper, including when the service supplied no ID,
+         * so a dead helper cannot be mistaken for ongoing installation. */
+        {
             SceAppInstallStatusInstalled sys_status;
             memset(&sys_status, 0, sizeof(sys_status));
-            if (sceAppInstUtilGetInstallStatus(info.content_id, &sys_status) == 0) {
+            int status_ret = install_service_status(&service, &sys_status);
+            if (status_ret == INSTALL_SERVICE_CANCELED) break;
+            if (status_ret == INSTALL_SERVICE_DISCONNECTED || status_ret == INSTALL_SERVICE_TIMEOUT) {
+                install_log("[INSTALLER] Lost helper pid=%d (code %d)", (int)service.pid, status_ret);
+                pthread_mutex_lock(&g_installer_mutex);
+                if (!g_cancel_stream && g_monitor_running) {
+                    g_status.is_installing = 0;
+                    g_status.failed = 1;
+                    g_status.error_code = status_ret;
+                    strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
+                    snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                             "Install helper stopped responding (code %d)", status_ret);
+                }
+                pthread_mutex_unlock(&g_installer_mutex);
+                break;
+            }
+            if (status_ret == 0) {
                 if (sys_status.error_info.error_code != 0 || strcmp(sys_status.status, "error") == 0 || strcmp(sys_status.status, "none") == 0) {
                     const char *sname = installer_strerror(sys_status.error_info.error_code);
                     install_log("[INSTALLER] System installer reported error 0x%08X (%s) (status='%s')",
@@ -1182,6 +1181,8 @@ static void *stream_installer_worker(void *arg) {
 
         sleep(1);
     }
+    install_service_close(&service);
+
 #else
     /* Mock streaming simulation for host tests */
     char mock_pkg_path[512];
@@ -1247,6 +1248,15 @@ static void *stream_installer_worker(void *arg) {
     }
     pthread_mutex_unlock(&g_installer_mutex);
 
+    installer_status_t final_status;
+    installer_get_status(&final_status);
+    install_log("[INSTALLER] Finished status=%s completed=%d failed=%d error=0x%08X downloaded=%llu served=%llu total=%llu canceled=%d shutdown=%d next=%.160s",
+                final_status.status_str, final_status.completed, final_status.failed,
+                (unsigned)final_status.error_code, (unsigned long long)final_status.downloaded_bytes,
+                (unsigned long long)final_status.stream_served_bytes,
+                (unsigned long long)final_status.total_bytes, g_cancel_stream, !g_monitor_running,
+                next_pkg_path);
+
     /* NEW: release the live RAM session (noop for disk installs). Abort
      * first so any reader blocked in ws_live_read wakes before/during
      * the stop's vs_refs drain; destroy frees the ring. */
@@ -1293,7 +1303,11 @@ int installer_init(const char *server_url) {
     cleanup_tmp_dir(tmp_dir);
     pthread_mutex_unlock(&g_installer_mutex);
 
+    /* Catalog DLC queries and leftover removal still use the parent's
+     * AppInstUtil client. Package submission/status and shortcut registration
+     * use separate processes and never share this session. */
 #if defined(__Prospero__) || defined(PS5_BUILD)
+    extern int sceAppInstUtilInitialize(void);
     int ret = sceAppInstUtilInitialize();
     if (ret != 0) {
         printf("[PKG Manager] sceAppInstUtilInitialize returned 0x%08X\n", ret);
@@ -1671,6 +1685,7 @@ int installer_cancel(void) {
         pthread_mutex_unlock(&g_installer_mutex);
         return -1;
     }
+    install_log("[INSTALLER] Cancel requested");
     g_cancel_stream = 1;
     g_pending_pkg_path[0] = '\0';
     g_status.is_installing = 0;
@@ -1680,7 +1695,7 @@ int installer_cancel(void) {
     pthread_mutex_unlock(&g_installer_mutex);
     /* NEW: unblock live readers before the stop drains vs_refs, then free. */
     ws_live_abort();
-    stream_server_session_stop();
+    stream_server_session_stop_keep_log();
     ws_live_destroy();
     ps5_notify("Installation canceled");
     return 0;
@@ -1821,6 +1836,7 @@ void installer_shutdown(void) {
     }
     stream_server_session_stop();
 #if defined(__Prospero__) || defined(PS5_BUILD)
+    extern int sceAppInstUtilTerminate(void);
     sceAppInstUtilTerminate();
 #endif
 }

@@ -40,9 +40,26 @@ fi
 
 # 3. Build native ELF via Docker
 echo "[2/3] Building native ELF via Docker..."
+# Force embedded-helper regeneration regardless of mtimes: blob.S incbins
+# build/install-helper.elf, so a stale helper silently ships old behavior.
+rm -f build/install-helper.elf
 docker run --rm -v "$(pwd)":/src -w /src $IMAGE_NAME make clean all
 
 echo "      ELF build successful."
+
+# 3b. Verify the embedded helper was actually regenerated.
+if [ ! -f "build/install-helper.elf" ]; then
+    echo "      !!! build/install-helper.elf missing after build!"
+    exit 1
+fi
+ls -l build/install-helper.elf
+python3 - <<'EOF'
+d = open('build/install-helper.elf','rb').read()
+h = 2166136261
+for b in d:
+    h = ((h ^ b) * 16777619) & 0xFFFFFFFF
+print('      helper bytes=%d fnv1a=0x%08X (compare with runtime embedded_fnv1a)' % (len(d), h))
+EOF
 
 # 4. Rename output
 if [ -f "pkgmgr.elf" ]; then

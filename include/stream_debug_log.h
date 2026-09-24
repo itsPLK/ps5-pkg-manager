@@ -12,7 +12,7 @@ extern "C" {
  * produces one timestamped .txt file in /data/pkgmgr/ (or $PKG_DEBUG_DIR)
  * containing a reproducible record of the download pattern:
  *
- *   /data/pkgmgr/stream_debug_<title_id>_<pkg_kind>_<YYYYMMDD_HHMMSS>.txt
+ *   /data/pkgmgr/stream_debug_<title_id>_<pkg_kind>_<timestamp>_<pid>_<seq>.txt
  *
  * Intended for offline replay / mock construction of the PS5 download
  * behaviour so that remote (WebSocket) streaming can reproduce the exact
@@ -82,6 +82,9 @@ void stream_debug_log_close(void);
 
 /* Returns non-zero when a debug log session is currently active. */
 int stream_debug_log_is_active(void);
+
+/* Persist an installer/helper diagnostic in the same timeline as HTTP/WS. */
+void stream_debug_log_event(const char *message);
 
 #ifdef __cplusplus
 }

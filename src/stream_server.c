@@ -1074,7 +1074,7 @@ int stream_server_session_start_ex(const char *pkg_path, const char *session_nam
     return 0;
 }
 
-void stream_server_session_stop(void) {
+static void stream_server_session_stop_internal(int close_log) {
     int join = 0;
     int lfd = -1;
     int kick[STREAM_MAX_TRACKED_FDS];
@@ -1129,6 +1129,14 @@ void stream_server_session_stop(void) {
     g_ss.total_size = 0;
     g_ss.session_name[0] = '\0';
     pthread_mutex_unlock(&g_ss.mutex);
-    stream_debug_log_close();
     install_log("[STREAM] raw server stopped");
+    if (close_log) stream_debug_log_close();
+}
+
+void stream_server_session_stop(void) {
+    stream_server_session_stop_internal(1);
+}
+
+void stream_server_session_stop_keep_log(void) {
+    stream_server_session_stop_internal(0);
 }

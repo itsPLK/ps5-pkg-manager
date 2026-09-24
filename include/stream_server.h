@@ -27,6 +27,9 @@ void stream_server_set_session_name(const char *session_name);
 /* Stops the listener and closes the virtual stream. Safe to call idle. */
 void stream_server_session_stop(void);
 
+/* Installer retries/cancellation keep the report open until helper cleanup. */
+void stream_server_session_stop_keep_log(void);
+
 /* Returns non-zero while a session is active. */
 int stream_server_is_running(void);
 

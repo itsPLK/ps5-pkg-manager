@@ -34,6 +34,10 @@ docker run --rm -v $(pwd):/src -w /src ps5-payload-sdk-pkgmgr make clean all
 
 The resulting `pkgmgr.elf` will be created in the root directory.
 
+The build also creates `build/install-helper.elf` and embeds it in `pkgmgr.elf`.
+Only `pkgmgr.elf` is deployed. The install helper launches directly; no elfldr
+service, loader port, or external helper file is required at runtime.
+
 ### 4. Build a Versioned Development Binary
 To build a versioned development binary (`pkg-manager_v<VERSION>-dev-<SHORT_HASH>.elf`):
 ```bash
@@ -46,6 +50,39 @@ You can run the full host test suite locally without Docker:
 ```bash
 make test
 ```
+
+`make test-install-service` exercises the actual helper protocol in freshly
+executed host processes with stubbed PS5 APIs. It covers consecutive installs,
+single-submission enforcement, native failures, malformed IPC, helper death,
+cancellation, parent disconnection, and graceful/forced child cleanup. This
+does not emulate PS5 `rfork`/ptrace or prove the firmware issue is resolved.
+
+For console validation, install at least two packages without restarting the
+manager, then exercise a base/update batch, consecutive Direct Installs, and a
+cancel followed by another install. The manager PID should stay constant; each
+attempt should report a distinct helper PID. Check both older firmware and an
+affected newer firmware.
+
+### Collecting install diagnostics from users
+
+Enable **PKG install debug** before reproducing the issue. Collect the generated
+`stream_debug_*.txt` report from `/data/pkgmgr/` (or `PKG_DEBUG_DIR`) and the full
+`/api/log` response. Reports retain their existing HTTP/WS events and now also
+contain timestamped `INSTALL_EVENT` records. A single report stays open across
+stream retries and through helper cleanup; names include PID and sequence to
+avoid overwriting same-second attempts. Retention remains 20 stream reports.
+
+Helper diagnostics record the raw firmware query, daemon/helper PIDs, embedded
+helper size/checksum/build, launch stages, IPC protocol sizes, native return
+codes and durations, request URLs, content IDs, status/progress snapshots,
+native error descriptions, timeout/cancel events, and process exit/signal
+status. Native status snapshots are written on changes and every five seconds.
+The report closes after the final outcome and helper cleanup.
+
+`/api/log` retains **65,536 lines** (previously 2,048), up to **32 MiB** in memory,
+and returns the full retained history. The ordinary `install.log` continues to
+store warnings/errors only; the debug report contains successful transitions
+needed to reconstruct an install attempt.
 
 This compiles and runs tests for:
 - Package parser (`test_pkg_parser`)

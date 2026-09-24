@@ -17,14 +17,8 @@
 #include "assets_param_json.h"
 #include "assets_icon0_png.h"
 
-#if defined(__Prospero__) || defined(PS5_BUILD)
-#include <ps5/kernel.h>
+#include "install_service.h"
 
-int sceAppInstUtilInitialize(void);
-int sceAppInstUtilTerminate(void);
-int sceAppInstUtilAppInstallAll(void *reserved);
-int sceAppInstUtilAppUnInstall(const char *title_id);
-#endif
 
 static int install_file(const char *path, const uint8_t *data, size_t size) {
     FILE *f = fopen(path, "wb");
@@ -40,21 +34,7 @@ static int install_file(const char *path, const uint8_t *data, size_t size) {
 
 static int install_app(const char *title_id, const char *dir) {
 #if defined(__Prospero__) || defined(PS5_BUILD)
-    int (*dyn_install_title_dir)(const char *, const char *, void *) = 0;
-    const char *nid = "Wudg3Xe3heE";
-    uint32_t handle;
-
-    if (!kernel_dynlib_handle(-1, "libSceAppInstUtil.sprx", &handle)) {
-        dyn_install_title_dir = (void *)kernel_dynlib_resolve(-1, handle, nid);
-    }
-
-    if (dyn_install_title_dir) {
-        return dyn_install_title_dir(title_id, dir, 0);
-    }
-
-    /* Match the working Payload Manager fallback: this API registers the
-     * files already written beneath /user/app/. */
-    return sceAppInstUtilAppInstallAll(0);
+    return install_service_shortcut(title_id, dir);
 #else
     (void)title_id;
     (void)dir;
@@ -109,10 +89,8 @@ static int do_install(int is_update) {
         ps5_notify("Installing PKG Manager Shortcut...");
     }
 
-    /* NOTE: sceAppInstUtil is initialized once in installer_init() and
-     * terminated in installer_shutdown(). Do NOT Initialize/Terminate here:
-     * a local Terminate would tear down the global installer subsystem and
-     * break subsequent package installs until daemon restart. */
+    /* Registration uses its own short-lived helper and cannot consume a
+     * package install's AppInstUtil/PlayGo session. */
 
     if (mkdir(base_dir, 0755) != 0 && errno != EEXIST) {
         int error = errno;

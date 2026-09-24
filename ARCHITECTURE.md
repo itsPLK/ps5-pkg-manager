@@ -59,7 +59,8 @@ flowchart TB
 
     %% Left: PS5 OS interactions
     APPINFO <-->|"SQLite Query"| APPDB
-    INSTALLER -->|"Trigger Install"| SCE
+    INSTALLER <-->|"Private IPC: submit / status"| HELPER["Fresh install helper process"]
+    HELPER -->|"One install per process"| SCE
     INSTALLER -.->|"Disc Swap Prompts"| NOTIF
     SCE -->|"Forward Stream URL"| RECEIVER
     RECEIVER -->|"HTTP 206 Range Requests"| SOCKET
@@ -238,6 +239,22 @@ int sceAppInstUtilGetInstallStatus(const char* content_id, SceAppInstallStatusIn
 
 ### Package Metadata & Installation Pipeline
 
+Every package submission runs in a fresh `pkg-install.elf` helper on all
+firmwares. The helper is built separately and embedded in `pkgmgr.elf`.
+`install_service.c` exchanges fixed-size, pointer-free messages over a private
+Unix socket; the helper owns initialization, one package submission, status
+polling, and termination of its AppInstUtil session. Retries and queued updates
+receive new processes. The daemon retains the HTTP/SMB/WebSocket servers,
+live upload buffers, install state, and browser connection throughout.
+
+`src/helper_process/` contains the launcher adapted from elfldr's process
+creation code. It directly starts a traced SceSpZeroConf process and maps the
+embedded helper after libc initialization. It never connects to elfldr or reads
+another copy of the manager ELF. IPC deadlines, a parent-disconnect watcher,
+and child termination/reaping handle failed or canceled operations. Shortcut
+registration uses a separate helper; existing DLC queries and leftover removal
+retain their independent AppInstUtil client in the daemon.
+
 When invoking `sceAppInstUtilInstallByPackage`, `pkg_metadata_t` is populated as follows:
 - **`uri`**: Unique per-install streaming URL (`http://127.0.0.1:18841/stream/install/package-<unixtime>-<seq>.pkg`). Timestamping prevents URI collisions across successive installations.
 - **`content_name`**: Formatted as `"<Title ID> (<Kind>)"` (e.g. `"CUSA00000 (Base)"` or `"CUSA00000 (Update)"`).
@@ -276,7 +293,7 @@ makes the exact body read block on bytes the server already sent.
 
 ```
 LAN browser (DirectInstallView) --ws://:18842--> ws_upload.c --RAM ring-->
-virtual_stream ("live:<id>") --:18841--> installer.c (existing worker) --> system installer
+virtual_stream ("live:<id>") --:18841--> system installer (submitted by fresh helper)
 ```
 
 The browser's `segmentSender.js` keeps up to two segments in flight when the

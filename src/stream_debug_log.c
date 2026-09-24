@@ -65,6 +65,23 @@ static void dbglog_write(const char *line) {
     fflush(g_dbglog_fp);
 }
 
+void stream_debug_log_event(const char *message) {
+    if (!message) return;
+    pthread_mutex_lock(&g_dbglog_mutex);
+    if (g_dbglog_fp) {
+        char clean[512];
+        snprintf(clean, sizeof(clean), "%s", message);
+        for (char *p = clean; *p; ++p) {
+            if (*p == '\n' || *p == '\r' || *p == '\t') *p = ' ';
+        }
+        char line[600];
+        snprintf(line, sizeof(line), "%llu\tINSTALL_EVENT\t-\t-\t-\t%s\n",
+                 (unsigned long long)dbglog_elapsed_ms(), clean);
+        dbglog_write(line);
+    }
+    pthread_mutex_unlock(&g_dbglog_mutex);
+}
+
 /* Caller holds g_dbglog_mutex. Upload events are batched to keep the debug
  * file useful without writing and flushing once for every 1 MiB segment. */
 static void dbglog_write_ws_sample(uint64_t now) {
@@ -204,7 +221,7 @@ int stream_debug_log_open(const char *title_id, const char *content_id,
         g_dbglog_fp = NULL;
     }
 
-    /* Build filename: stream_debug_<title_id>_<kind>_<YYYYMMDD_HHMMSS>.txt */
+    /* Include PID and sequence so same-second attempts never overwrite. */
     const char *tid = (title_id && title_id[0] != '\0') ? title_id : "UNKNOWN";
     const char *kind = (pkg_kind && pkg_kind[0] != '\0') ? pkg_kind : "unknown";
     const char *cid = (content_id && content_id[0] != '\0') ? content_id : "";
@@ -219,7 +236,9 @@ int stream_debug_log_open(const char *title_id, const char *content_id,
 
     const char *dir = dbglog_get_dir();
     char filepath[1024];
-    snprintf(filepath, sizeof(filepath), "%s/stream_debug_%s_%s_%s.txt", dir, tid, kind, ts);
+    static unsigned session_sequence;
+    snprintf(filepath, sizeof(filepath), "%s/stream_debug_%s_%s_%s_%d_%u.txt",
+             dir, tid, kind, ts, (int)getpid(), ++session_sequence);
 
     g_dbglog_fp = fopen(filepath, "w");
     if (!g_dbglog_fp) {
@@ -274,6 +293,7 @@ int stream_debug_log_open(const char *title_id, const char *content_id,
              "# Fields: elapsed_ms \\t event_type \\t conn_id \\t req_no \\t peer \\t details...\n"
              "#\n"
              "# Event types:\n"
+             "#   INSTALL_EVENT - Installer/helper lifecycle, IPC and native service diagnostics\n"
              "#   CONN_OPEN    - New TCP connection accepted\n"
              "#   REQUEST      - HTTP request received and response sent\n"
              "#   BODY_DONE    - Response body fully/partially delivered\n"

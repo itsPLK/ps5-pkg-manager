@@ -353,13 +353,18 @@ static void test_logging_reduction(void) {
     install_log_set_file_path(test_log);
 
     /* 7. Ring buffer rollover (more than MAX_LOG_LINES lines) */
-    for (int i = 0; i < 2200; i++) {
+    install_log_clear();
+    for (int i = 0; i < INSTALL_LOG_MAX_LINES + 100; i++) {
         install_log("[TEST] Informational line %d", i);
     }
     char *rollover_logs = install_log_get_text(&sz);
     assert(rollover_logs != NULL);
-    assert(strstr(rollover_logs, "Informational line 2199") != NULL);
-    /* Line 0 should have been rolled out past the 2048 capacity */
+    char last_line[80];
+    snprintf(last_line, sizeof(last_line), "Informational line %d\n", INSTALL_LOG_MAX_LINES + 99);
+    assert(strstr(rollover_logs, last_line) != NULL);
+    assert(strstr(rollover_logs, "Informational line 100\n") != NULL);
+    /* Only the oldest 100 entries should have rolled out. */
+    assert(strstr(rollover_logs, "Informational line 99\n") == NULL);
     assert(strstr(rollover_logs, "Informational line 0\n") == NULL);
     free(rollover_logs);
 
@@ -672,6 +677,7 @@ static void test_stream_debug_logging(void) {
 
     assert(stream_debug_log_open("PPSA77777", "EP0001-PPSA77777_00-0000000000000000", "update", fix_path, 65837) == 0);
     assert(stream_debug_log_is_active() == 1);
+    install_log("[HELPER_LAUNCH] diagnostic before retry");
 
     /* 2. Client 1: Range request */
     int sock1 = tcp_connect_stream_server();
@@ -711,6 +717,14 @@ static void test_stream_debug_logging(void) {
     char buf3[512] = {0};
     while (recv(sock3, buf3, sizeof(buf3), 0) > 0) {}
     close(sock3);
+
+    /* Retry/cancel can stop transport while helper cleanup still needs to be
+     * recorded in the original report. A restart must preserve that report. */
+    stream_server_session_stop_keep_log();
+    assert(stream_debug_log_is_active() == 1);
+    install_log("[HELPER] diagnostic during cleanup");
+    assert(stream_server_session_start_ex(fix_path, "package-retry.pkg") == 0);
+    install_log("[HELPER] diagnostic after retry");
 
     /* 5. Stop session and close debug log */
     stream_server_session_stop();
@@ -760,6 +774,10 @@ static void test_stream_debug_logging(void) {
     assert(strstr(log_content, "CONN_CLOSE") != NULL);
     assert(strstr(log_content, "404") != NULL);
     assert(strstr(log_content, "# Session ended") != NULL);
+    assert(strstr(log_content, "INSTALL_EVENT") != NULL);
+    assert(strstr(log_content, "diagnostic before retry") != NULL);
+    assert(strstr(log_content, "diagnostic during cleanup") != NULL);
+    assert(strstr(log_content, "diagnostic after retry") != NULL);
 
     /* Clean up */
     unlink(found_file);
