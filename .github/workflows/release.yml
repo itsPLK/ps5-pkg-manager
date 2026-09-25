@@ -66,13 +66,35 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
 
-          if [ -n "$PREV_TAG" ]; then
-            NOTES="Full Changelog: https://github.com/${{ github.repository }}/compare/$PREV_TAG...$TAG"
-          else
-            NOTES="First Release."
-          fi
+          TAG="$TAG" PREV_TAG="$PREV_TAG" REPOSITORY="${{ github.repository }}" python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          tag = os.environ["TAG"]
+          lines = Path("CHANGELOG.md").read_text().splitlines()
+          section = []
+          found = False
+          for line in lines:
+              if not found:
+                  if line.strip() == f"## {tag}":
+                      found = True
+                  continue
+              if line.startswith("## "):
+                  break
+              section.append(line)
+
+          changelog = "\n".join(section).strip()
+          while changelog.endswith("---"):
+              changelog = changelog[:-3].rstrip()
+
+          notes = changelog or f"No exact {tag} section found in CHANGELOG.md."
+          previous = os.environ.get("PREV_TAG", "")
+          if previous:
+              notes += f"\n\nFull Changelog: https://github.com/{os.environ['REPOSITORY']}/compare/{previous}...{tag}"
+          Path("release-notes.md").write_text(notes + "\n")
+          PY
 
           gh release create "$TAG" \
             --title "$TAG" \
-            --notes "$NOTES" \
+            --notes-file release-notes.md \
             "pkg-manager_v${VERSION}.elf"
