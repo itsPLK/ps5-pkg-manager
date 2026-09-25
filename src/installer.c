@@ -836,11 +836,11 @@ static void *stream_installer_worker(void *arg) {
         g_status.failed = 1;
         g_status.error_code = -23;
         strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
-        snprintf(g_status.prompt_message, sizeof(g_status.prompt_message), "Failed to start virtual stream session");
+        snprintf(g_status.prompt_message, sizeof(g_status.prompt_message), "Package file not found or cannot be opened");
         g_pending_pkg_path[0] = '\0';
         pthread_mutex_unlock(&g_installer_mutex);
-        ps5_notify("Failed to start virtual stream!");
-        install_log("[INSTALLER] Failed to start stream session for %s", worker_pkg_path);
+        ps5_notify("Package file not found or cannot be opened!");
+        install_log("[INSTALLER] Failed to open stream for %s (file missing or inaccessible)", worker_pkg_path);
         stream_debug_log_close();
         return NULL;
     }
@@ -1368,6 +1368,21 @@ static int installer_start_internal(const char *pkg_path, const char *pending_pk
     char pkg_path_copy[512];
     strncpy(pkg_path_copy, pkg_path, sizeof(pkg_path_copy) - 1);
     pkg_path_copy[sizeof(pkg_path_copy) - 1] = '\0';
+
+    /* Verify that the package file exists and is accessible before proceeding */
+    if (virtual_stream_check_path(pkg_path_copy) != 0) {
+        install_log("[INSTALLER] Package file does not exist or cannot be opened: %s", pkg_path_copy);
+        ps5_notify("Package file not found!");
+        return -4; /* File not found */
+    }
+
+    if (pending_path_copy[0] != '\0') {
+        if (virtual_stream_check_path(pending_path_copy) != 0) {
+            install_log("[INSTALLER] Update package file does not exist or cannot be opened: %s", pending_path_copy);
+            ps5_notify("Update package file not found!");
+            return -4;
+        }
+    }
 
     pkg_detail_t detail;
     if (pkg_parser_parse(pkg_path_copy, &detail) != 0) {

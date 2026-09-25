@@ -42,6 +42,13 @@ int main(void) {
     assert(fixture_write_ps5_pkg("/tmp/test_installer_fixtures/wc.pkg",
                                  "PPSA90012", "WaveCast", "gd", "01.003.000", 1) == 0);
 
+    /* Test 0: Missing package file fails immediately with -4 */
+    int missing_res = installer_start("/tmp/test_installer_fixtures/missing_nonexistent.pkg");
+    printf("Missing pkg install start result: %d (expected -4)\n", missing_res);
+    assert(missing_res == -4);
+    installer_get_status(&st);
+    assert(st.is_installing == 0);
+
     /* Test 1: Start install with standard pkg (streams via worker thread) */
     int start_res = installer_start("/tmp/test_installer_fixtures/wc.pkg");
     printf("Start install result: %d\n", start_res);

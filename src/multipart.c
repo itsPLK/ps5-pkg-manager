@@ -814,3 +814,19 @@ const char *virtual_stream_get_smb_url(const virtual_stream_t *stream) {
     if (stream->parts[0].path[0] == '\0') return NULL;
     return stream->parts[0].path;
 }
+
+int virtual_stream_check_path(const char *path) {
+    if (!path || path[0] == '\0') return -1;
+    if (strncmp(path, "live:", 5) == 0) {
+        return ws_live_check_id(path + 5) ? 0 : -1;
+    }
+    if (strncmp(path, "smb://", 6) == 0) {
+        smb_file_session_t *sess = smb_file_session_open(path);
+        if (!sess) return -1;
+        smb_file_session_close(sess);
+        return 0;
+    }
+    const char *local_path = (strncmp(path, "file://", 7) == 0) ? path + 7 : path;
+    struct stat st;
+    return stat(local_path, &st) == 0 ? 0 : -1;
+}

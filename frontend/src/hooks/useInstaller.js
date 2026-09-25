@@ -161,6 +161,9 @@ export function useInstaller(props) {
           if (selectedDriveRef && selectedDriveRef.current && fetchPackagesForDrive) {
             fetchPackagesForDrive(selectedDriveRef.current);
           }
+          if (data.failed) {
+            if (showToast) showToast(data.prompt_message || 'Installation failed', 'error');
+          }
         }
 
         const currentBatchAfterStatus = batchInstallRef.current;
@@ -217,7 +220,9 @@ export function useInstaller(props) {
     try {
       const data = await installPackage(pkg.path);
       if (!data || !data.success) {
-        if (showToast) showToast(data.error || 'Failed to start installation', 'error');
+        if (showToast) {
+          showToast((data && data.error) || 'Failed to start installation', 'error');
+        }
         if (shouldRestoreDetailScrollRef) shouldRestoreDetailScrollRef.current = false;
       } else {
         if (showToast) showToast(`Installing ${pkg.title_name || 'package'}...`, 'success');
@@ -281,10 +286,12 @@ export function useInstaller(props) {
     try {
       const data = await installPackage(basePkg.path, updatePkg.path);
       if (!data || !data.success) {
-        if (showToast) showToast(data.error || 'Failed to start base installation', 'error');
         try { localStorage.removeItem('pkg_batch_install'); } catch (e) {}
         setBatchInstall(null);
         if (shouldRestoreDetailScrollRef) shouldRestoreDetailScrollRef.current = false;
+        if (showToast) {
+          showToast((data && data.error) || 'Failed to start base installation', 'error');
+        }
       } else {
         fetchStatus();
       }

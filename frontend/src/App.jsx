@@ -231,6 +231,43 @@ export default function App() {
     }
   };
 
+  const handleQuickRescan = async (forced = false) => {
+    if (refreshingRef.current) return false;
+    if (quickScanInProgressRef.current) {
+      let waitCount = 0;
+      while (quickScanInProgressRef.current && waitCount++ < 30) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    refreshingRef.current = true;
+    setRefreshing(true);
+
+    try {
+      const targetDrive = selectedDriveRef.current;
+      const targetId = targetDrive && targetDrive.id && targetDrive.id !== '__all__' ? targetDrive.id : null;
+      const data = await quickScan(targetId);
+      await Promise.all([
+        fetchDrives(),
+        fetchStorage(),
+        fetchPackagesForDrive(selectedDriveRef.current, true)
+      ]);
+      if (data && data.changed) {
+        showToast('Catalog updated', 'success');
+      } else if (!forced) {
+        showToast('No changes found', 'info');
+      }
+      return true;
+    } catch (err) {
+      showToast('Error during rescan: ' + err.message, 'error');
+      return false;
+    } finally {
+      refreshingRef.current = false;
+      setTimeout(() => {
+        setRefreshing(false);
+      }, 400);
+    }
+  };
+
   const {
     cacheStats, loadingStats, showClearCacheModal, setShowClearCacheModal,
     clearingCache, fetchCacheStats, handleClearCache
@@ -474,7 +511,15 @@ export default function App() {
     etaInfo, isWaitingForPart, isBatchActive, isInstalling, isDiscSource, speedCalcRef, wasInstallingRef, batchInstallRef,
     installerStatusRef, fetchStatus, handleInstall, handleInstallBaseAndUpdate, handleCancel
   } = useInstaller({
-    showToast, fetchStorage, fetchPackagesForDrive, selectedDriveRef, selectedTitleIdRef, detailScrollPositionRef, shouldRestoreDetailScrollRef, storage, selectedTitle
+    showToast,
+    fetchStorage,
+    fetchPackagesForDrive,
+    selectedDriveRef,
+    selectedTitleIdRef,
+    detailScrollPositionRef,
+    shouldRestoreDetailScrollRef,
+    storage,
+    selectedTitle,
   });
 
   const {
@@ -856,8 +901,8 @@ export default function App() {
     />;
   }
 
-  // Refresh and scan progress overlay.
-  if (refreshing || scanStatus.is_scanning) {
+  // Refresh and scan progress overlay (for full catalog rebuilds).
+  if (scanStatus.is_scanning) {
     return <ScanningScreen scanStatus={scanStatus} />;
   }
 
@@ -893,7 +938,7 @@ export default function App() {
           }
           handleOpenSettings();
         }}
-        onRescan={refreshAll}
+        onRescan={handleQuickRescan}
         refreshing={refreshing}
         selectedDrive={selectedDrive}
         onBackToDrives={handleBackToDrives}
@@ -1012,7 +1057,8 @@ export default function App() {
             onDirectInstall={openDirectInstall}
             showDirectInstall={!isPlayStation}
             loadingDrives={loadingDrives}
-            refreshAll={refreshAll}
+            refreshAll={handleQuickRescan}
+            onRescan={handleQuickRescan}
           />
         )}
       </main>

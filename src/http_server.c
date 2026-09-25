@@ -1385,6 +1385,10 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                 snprintf(response_buf, sizeof(response_buf),
                          "{\"success\":false,\"error\":\"Another package is currently installing\"}");
                 status_code = MHD_HTTP_CONFLICT;
+            } else if (res == -4) {
+                snprintf(response_buf, sizeof(response_buf),
+                         "{\"success\":false,\"error\":\"Package file not found or cannot be opened\"}");
+                status_code = MHD_HTTP_OK;
             } else if (res == -10) {
                 snprintf(response_buf, sizeof(response_buf),
                          "{\"success\":false,\"error\":\"Insufficient storage space to install package\"}");

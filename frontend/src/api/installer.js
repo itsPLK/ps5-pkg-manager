@@ -10,8 +10,15 @@ export async function installPackage(path, updatePath = '') {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updatePath ? { path, update_path: updatePath } : { path })
   });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (e) {
+    data = null;
+  }
+  if (data) return data;
   if (!res.ok) throw new Error(`Install failed: ${res.status}`);
-  return res.json();
+  return { success: false, error: `Install failed: ${res.status}` };
 }
 
 export async function cancelInstall() {

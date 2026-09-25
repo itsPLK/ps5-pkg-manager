@@ -16,8 +16,12 @@
 - Added a Close PKG Manager action that stops the server process gracefully
 - Reorganized Settings cards
 
+### Installation
+- Fail fast and show a clear error if trying to install a package that no longer exists on storage or Samba
+
 ### Cache and Scanning
 - Preserve the metadata and icon cache across routine ELF updates; clear and rescan only when the cache schema changes
+- Switched the Rescan button to run a fast quick rescan instead of rebuilding the full cache
 
 ---
 

@@ -145,6 +145,12 @@ void virtual_stream_close(virtual_stream_t *stream);
  */
 const char *virtual_stream_get_smb_url(const virtual_stream_t *stream);
 
+/**
+ * Checks if a package source path exists and is accessible (local file, SMB, or live).
+ * Returns 0 if accessible, negative if missing or inaccessible.
+ */
+int virtual_stream_check_path(const char *path);
+
 #ifdef __cplusplus
 }
 #endif
