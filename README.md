@@ -77,103 +77,87 @@ Multi-part packages can be burned across multiple discs or loaded directly from 
 
 ### How do I connect to a Windows 11 share without a password?
 
-Windows must allow **guest network logon** as well as access to the folder.
-Giving **Everyone** read permission alone does not enable guest access.
-Configure the following on the **Windows PC hosting the files**.
+Guest sharing allows other devices on your local network to read shared
+packages without entering credentials. Configure the following on the
+**Windows PC hosting the files**:
 
-Guest sharing lets other devices on the network read the shared files without
-credentials. Use it only on a trusted private network. Windows guest sessions
-cannot use SMB signing or encryption; using a Windows account with a password
-lets you keep those protections enabled.
+1. **Enable file sharing & turn off password protection.** Set the PC's network
+   profile to **Private**. Open **Settings → Network & internet → Advanced
+   network settings → Advanced sharing settings**. Under **Private networks**,
+   enable **Network discovery** and **File and printer sharing**. Under **All
+   networks**, turn off **Password protected sharing**. Ensure File and Printer
+   Sharing is allowed through Windows Firewall for the private network.
 
-1. **Enable file sharing.** Set the PC's network profile to **Private**. Open
-   **Settings → Network & internet → Advanced network settings → Advanced sharing
-   settings**. Under **Private networks**, enable **Network discovery** and
-   **File and printer sharing**. Under **All networks**, turn off
-   **Password protected sharing**. Allow File and Printer Sharing through Windows
-   Firewall for the private network.
-
-2. **Share the folder with read access.** Right-click the package folder, open
+2. **Share the folder with read access.** Right-click your package folder, open
    **Properties → Sharing → Advanced Sharing**, enable **Share this folder**,
-   and choose a share name, for example `PS5PKG`. In **Permissions**, grant
-   **Everyone → Read**. In the folder's **Security** tab, also grant the Guest
-   account **Read & execute**, **List folder contents**, and **Read**, including
-   the package files and subfolders. Share and filesystem permissions both apply.
+   and name it (e.g. `PS5PKG`). In **Permissions**, grant **Everyone → Read**.
+   In the folder's **Security** tab, verify that **Everyone** (or **Users**) has
+   **Read & execute**, **List folder contents**, and **Read** permissions. Share
+   and filesystem permissions both apply.
 
-3. **Enable the built-in Guest account.** Open **PowerShell as Administrator**
-   and run:
-
-   ```powershell
-   $guest = Get-LocalUser | Where-Object { $_.SID.Value -like '*-501' }
-   $guest | Enable-LocalUser
-   $guest | Select-Object Name
-   ```
-
-   This finds the account even if Windows uses a translated or renamed Guest
-   account. Note the displayed name for the permission settings and app setup.
-
-4. **Permit Guest to log on over the network.** On Windows editions with Local
-   Security Policy, open `secpol.msc` and navigate to **Local Policies → User
-   Rights Assignment**. Remove the Guest account from **Deny access to this
-   computer from the network**. Ensure **Access this computer from the network**
-   includes Guest or a group that permits its access. A deny entry for any group
-   containing Guest overrides an allow entry; preserve unrelated policy entries.
-   If Windows Home or an organization policy prevents changing these settings,
-   use a Windows account with a password in PKG Manager.
-
-5. **Allow unsigned guest sessions.** Windows 11 can require SMB signing,
-   particularly on newer editions/builds. In administrator PowerShell, run:
-
-   ```powershell
-   Set-SmbServerConfiguration -RequireSecuritySignature $false -Force
-   ```
-
-   This changes the signing requirement for the **whole SMB server**. Check
-   encryption requirements too:
-
-   ```powershell
-   Get-SmbServerConfiguration | Select-Object RequireSecuritySignature, EncryptData
-   Get-SmbShare -Name 'PS5PKG' | Select-Object Name, EncryptData
-   ```
-
-   Both encryption values must be `False` for guest access. If encryption is
-   enabled and you intend to allow guest access on this PC, disable it at the
-   applicable level:
-
-   ```powershell
-   # Server-wide setting, if enabled:
-   Set-SmbServerConfiguration -EncryptData $false -Force
-   # Share setting, if enabled:
-   Set-SmbShare -Name 'PS5PKG' -EncryptData $false -Force
-   ```
-
-6. **Add the share in PKG Manager.** In **Settings → Samba**, enter the PC's IP
+3. **Add the share in PKG Manager.** In **Settings → Samba**, enter the PC's IP
    address as **Server**, leave port **445**, and enter `PS5PKG` as **Share**.
-   Leave **Username** and **Password** blank for the default `Guest` account.
-   If its name differs, enter the name shown in step 3 and leave the password
-   blank. Use **Test connection**, then save the share. If **Select share** fails,
-   type the share name directly: Windows may block listing shares while allowing
-   access to a known share.
+   Leave **Username** and **Password** blank. Use **Test connection**, then save
+   the share. If **Select share** fails, type the share name directly: Windows
+   may block listing shares while allowing access to a known share.
 
-Common failures:
+<details>
+<summary><b>Troubleshooting / If connection fails (Windows 11 24H2, Pro, or Enterprise)</b></summary>
+
+Newer Windows 11 releases (such as 24H2) or Pro/Enterprise editions enforce SMB
+signing and restrict guest logons by default. If the connection fails or
+returns access denied errors, check the following:
+
+#### 1. Enable the built-in Guest account
+Open **PowerShell as Administrator** and run:
+
+```powershell
+$guest = Get-LocalUser | Where-Object { $_.SID.Value -like '*-501' }
+$guest | Enable-LocalUser
+$guest | Select-Object Name
+```
+
+#### 2. Permit Guest to log on over the network
+On Windows editions with Local Security Policy, open `secpol.msc` and navigate
+to **Local Policies → User Rights Assignment**:
+* Remove **Guest** from **Deny access to this computer from the network**.
+* Ensure **Access this computer from the network** includes **Guest** or a group
+  that permits its access.
+
+#### 3. Allow unsigned guest sessions and disable encryption
+Windows guest sessions cannot use SMB signing or encryption. In administrator
+PowerShell, run:
+
+```powershell
+# Disable signing requirement for the SMB server:
+Set-SmbServerConfiguration -RequireSecuritySignature $false -Force
+
+# Verify and disable SMB encryption if enabled:
+Set-SmbServerConfiguration -EncryptData $false -Force
+Set-SmbShare -Name 'PS5PKG' -EncryptData $false -Force
+```
+
+#### Common Failures
 
 | Error | What to check |
 | --- | --- |
-| Account disabled / `0xC0000072` | Enable the Guest account in step 3. |
-| Logon type not granted / `0xC000015B` | Check the network logon policies in step 4. |
-| Signing required | Check the server signing requirement in step 5, or use credentials. |
-| Access denied / `0xC0000022` | Check guest logon, signing/encryption requirements, and both folder permission lists. |
+| Account disabled / `0xC0000072` | Enable the Guest account in step 1 above. |
+| Logon type not granted / `0xC000015B` | Check the network logon policies in `secpol.msc` (step 2). |
+| Signing required | Disable the server signing requirement (step 3), or use a Windows account with credentials. |
+| Access denied / `0xC0000022` | Check guest logon, signing/encryption requirements, and both Share and Security permission lists. |
 
-Windows' **Enable insecure guest logons** / `AllowInsecureGuestAuth` setting
-controls Windows acting as an SMB **client**. It does not enable guest access
-to the share hosted by that PC for your PS5.
+> **Note**: Windows' **Enable insecure guest logons** (`AllowInsecureGuestAuth`)
+> policy controls Windows acting as an SMB *client*. It does not enable guest
+> access to shares *hosted* by that PC.
 
 References: Microsoft's [Windows file-sharing guide](https://support.microsoft.com/en-us/windows/experience/connectivity-networking/file-sharing-over-a-network-in-windows),
 [SMB signing requirements](https://learn.microsoft.com/en-us/windows-server/storage/file-server/smb-signing),
 [Guest account activation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.localaccounts/enable-localuser),
 and [network logon deny policy](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/deny-access-to-this-computer-from-the-network).
-For diagnostic commands and the Windows VM test results, see
+For diagnostic commands and Windows VM test results, see
 [SMB diagnostics](docs/SMB_DIAGNOSTICS.md).
+
+</details>
 
 ## Architecture
 For in-depth technical details regarding the system architecture, range streaming, and installation pipeline, see [ARCHITECTURE.md](ARCHITECTURE.md).
