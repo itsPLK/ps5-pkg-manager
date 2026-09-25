@@ -45,21 +45,13 @@ When using a USB drive or optical disc, packages are detected in:
 - The **/pkg/** directory, where nested subdirectories are also scanned (e.g. `/pkg/homebrew/`).
 
 ### Network Shares (Samba / SMB)
-You can configure SMB network shares in the app's **Settings** tab to browse and install packages stored on your PC or NAS.
+You can configure SMB network shares in **Settings → Samba** to browse and
+install packages stored on your PC or NAS. Network shares are not refreshed
+automatically; use the **Rescan** button to update the package catalog after
+adding new files.
 
-For large shares, enable **Browse only** when adding or editing a share to skip
-full and background catalog scans. Open the share from the storage screen or
-choose **Browse files** in Samba settings, navigate folders, select a PKG, and
-choose **Install selected PKG**. Folder listings have 64 entries per page;
-metadata is read only for the selected file. The scanned catalog shows 60 titles
-per page.
-
-For Windows shares without a username/password, see the
+For Windows shares without a username or password, see the
 [Windows 11 guest-sharing FAQ](#how-do-i-connect-to-a-windows-11-share-without-a-password).
-
-Full rescans run in the background. Retrying or reopening the interface attaches
-to an active scan without queuing another pass. Network shares are not rescanned
-by the frontend's 15-second polling timer; use **Rescan** to refresh their catalog.
 
 ### Direct Install
 From another device on the same network, open the PKG Manager interface and choose **Direct Install**. Select or drop a local `.pkg` file to install it directly on the console.
