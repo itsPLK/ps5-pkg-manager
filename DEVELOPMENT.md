@@ -120,6 +120,18 @@ transport mock. It checks:
 failure, reconnecting without another scan request, manual browse/inspect requests,
 and rendering 60 cards from 3,000 titles, including the last page.
 
+To manually inspect the frontend with a large synthetic catalog, build the
+frontend once, then run the mock server (which serves both the UI and mock API):
+
+```bash
+cd frontend && npm run build
+PKG_MOCK_COUNT=3000 npm run mock
+```
+
+Open `http://localhost:8844`. The mock API adds synthetic SMB packages to the
+main catalog; the default mock remains the small hand-authored demo.
+`PKG_MOCK_COUNT` can be set to another total, up to 20,000.
+
 These tests validate application behavior with a mocked SMB transport. A live
 PS5/NAS run is still needed to confirm console memory limits, server timeouts,
 controller interaction and installation from the reporter's share.

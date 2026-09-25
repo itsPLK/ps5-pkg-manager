@@ -398,6 +398,49 @@ const examplePkgs = [
   }
 ];
 
+// Set PKG_MOCK_COUNT to exercise the catalog UI with a large synthetic SMB
+// library (for example: PKG_MOCK_COUNT=3000 npm run mock). The default demo
+// remains the small hand-authored catalog above.
+const requestedMockPkgCount = Number.parseInt(process.env.PKG_MOCK_COUNT || '0', 10);
+const mockPkgCount = Number.isFinite(requestedMockPkgCount)
+  ? Math.max(0, Math.min(requestedMockPkgCount, 20000))
+  : 0;
+for (let i = examplePkgs.length; i < mockPkgCount; i++) {
+  const serial = String(i + 1).padStart(5, '0');
+  const titleId = `PPSA${String(i + 1).padStart(5, '0')}`;
+  const filename = `Synthetic_Game_${serial}_Base.pkg`;
+  examplePkgs.push({
+    path: `smb://192.168.1.100/Games/PS5/Synthetic/${filename}`,
+    filename,
+    title_id: titleId,
+    title_name: `Synthetic Game ${serial}`,
+    content_id: `EP9000-${titleId}_00-SYNTHETICGAME${serial}`,
+    app_version: '01.000.000',
+    pkg_type: 'base',
+    category: 'gd',
+    mtime: 1718000000 - i,
+    file_size: 25000000000 + i * 1000000,
+    total_pkg_size: 25000000000 + i * 1000000,
+    has_icon: false,
+    is_multipart: false,
+    part_index: 0,
+    total_parts: 0,
+    is_installed: false,
+    installed_version: '',
+    is_dlc_installed: false,
+    has_leftover: false,
+    leftover_desc: '',
+    is_partially_installed: false,
+    partial_desc: '',
+    can_install: true,
+    install_disabled_reason: '',
+    blurhash: ''
+  });
+}
+if (mockPkgCount > 0) {
+  console.log(`[Mock Server] Serving ${examplePkgs.length} packages (${mockPkgCount} requested)`);
+}
+
 const mockDrives = [
   {
     id: 'usb0',
@@ -423,7 +466,7 @@ const mockDrives = [
     label: 'SMB: Games',
     path: 'smb://192.168.1.100/Games',
     mounted: true,
-    pkg_count: 4,
+    pkg_count: mockPkgCount > 0 ? Math.max(4, mockPkgCount - 10) : 4,
     clickable: true
   },
   {
