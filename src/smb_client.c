@@ -791,6 +791,7 @@ int smb_client_list_dir(const smb_share_config_t *cfg, const char *subpath,
 /* Recursive directory scanner helper over SMB */
 static int scan_smb_dir(struct smb2_context *ctx, const smb_share_config_t *cfg,
                         const char *sub_dir, int depth,
+                        int skip_unreadable_subdirs,
                         smb_pkg_callback_t pkg_cb, void *user_data) {
     if (depth > 4) return 0;
 
@@ -814,8 +815,16 @@ static int scan_smb_dir(struct smb2_context *ctx, const smb_share_config_t *cfg,
 
         if (ent->st.smb2_type == SMB2_TYPE_DIRECTORY) {
             /* Descend into subdirectories */
-            int sub_count = scan_smb_dir(ctx, cfg, child_path, depth + 1, pkg_cb, user_data);
+            int sub_count = scan_smb_dir(ctx, cfg, child_path, depth + 1,
+                                         skip_unreadable_subdirs, pkg_cb, user_data);
             if (sub_count < 0) {
+                /* A share-root scan can encounter unrelated folders that the
+                 * configured account cannot read (for example server-managed
+                 * directories). Keep scanning siblings so one such folder
+                 * does not hide every readable PKG in the share. A selected
+                 * starting folder remains strict so incomplete scans are
+                 * still reported to the caller. */
+                if (skip_unreadable_subdirs) continue;
                 smb2_closedir(ctx, dir);
                 return -1;
             }
@@ -855,11 +864,16 @@ int smb_client_scan_share(const smb_share_config_t *cfg,
                           void *user_data) {
     if (!cfg || !cfg->enabled) return 0;
 
-    struct smb2_context *ctx = smb_connect(cfg, NULL, 0, 0);
+    smb_share_config_t clean_cfg = *cfg;
+    smb_client_sanitize_config(&clean_cfg);
+
+    struct smb2_context *ctx = smb_connect(&clean_cfg, NULL, 0, 0);
     if (!ctx) return -1;
 
-    const char *base_path = (cfg->path[0] != '\0' && strcmp(cfg->path, "/") != 0) ? cfg->path : "";
-    int total = scan_smb_dir(ctx, cfg, base_path, 0, pkg_cb, user_data);
+    const char *base_path = clean_cfg.path;
+    int at_share_root = base_path[0] == '\0';
+    int total = scan_smb_dir(ctx, &clean_cfg, base_path, 0,
+                             at_share_root, pkg_cb, user_data);
 
     smb2_destroy_context(ctx);
     return total;
