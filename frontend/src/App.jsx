@@ -11,7 +11,7 @@ import { getStorage } from './api/storage';
 import { getDrives } from './api/drives';
 import { getPackages, refreshPackages, getScanStatus, waitForScan, quickScan, shouldAutoScanDrive } from './api/packages';
 import { pollStatus, installPackage, cancelInstall } from './api/installer';
-import { getSettings, saveSettings } from './api/settings';
+import { getSettings, saveSettings, closeManager } from './api/settings';
 import { installShortcut as apiInstallShortcut } from './api/settings';
 import { getCacheStats, clearCache } from './api/cache';
 import { scanLeftovers as apiScanLeftovers, deleteLeftover } from './api/leftovers';
@@ -55,6 +55,7 @@ const CACHE_VERSION_STORAGE_KEY = 'pkgmgr_cache_version';
 
 export default function App() {
   const [isOffline, setIsOffline] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
   const [appVersion, setAppVersion] = useState('');
   
   const [drives, setDrives] = useState([]);
@@ -791,6 +792,22 @@ export default function App() {
       });
     }
   }, [isInstalling, isWaitingForPart, batchInstall, selectedTitleId]);
+  if (isClosing) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0f] text-white flex items-center justify-center px-4 font-ps5">
+        <div className="max-w-lg w-full rounded-[2px] bg-[#141520] border border-white/10 p-8 text-center space-y-4">
+          <div className="mx-auto w-14 h-14 rounded-full bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+            <svg className="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M5 12l4 4L19 6" />
+            </svg>
+          </div>
+          <h1 className="text-2xl font-bold">PKG Manager is closed</h1>
+          <p className="text-sm text-zinc-300">The server process has stopped. You can close this tab.</p>
+        </div>
+      </div>
+    );
+  }
+
   if (isOffline) {
     return <OfflineScreen onRetry={() => {
       if (checkOnlineRef.current) checkOnlineRef.current();
@@ -926,6 +943,16 @@ export default function App() {
             onClose={handleCloseSettings}
             onOpenSmb={handleOpenSmb}
             onInstallShortcut={handleInstallShortcut}
+            onCloseApp={async () => {
+              if (!window.confirm('Close PKG Manager? This will stop its server process.')) return;
+              try {
+                const result = await closeManager();
+                if (result?.success) setIsClosing(true);
+                else showToast('PKG Manager did not accept the close request.', 'error');
+              } catch (err) {
+                showToast('Failed to close PKG Manager: ' + err.message, 'error');
+              }
+            }}
             installingShortcut={installingShortcut}
             cacheStats={cacheStats}
             loadingStats={loadingStats}

@@ -245,6 +245,12 @@ int main(int argc, char **argv) {
     while (g_running) {
         usleep(100000); /* 100ms sleep */
 
+        if (http_server_exit_requested()) {
+            printf("[PKG Manager] Shutdown requested from Settings.\n");
+            g_running = 0;
+            break;
+        }
+
         /* Immediate Wake-up Recovery */
         if (g_resumed) {
             g_resumed = 0;

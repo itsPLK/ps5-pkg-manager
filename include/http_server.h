@@ -25,6 +25,9 @@ void http_server_stop(void);
  */
 int http_server_is_running(void);
 
+/** Returns 1 after a client requested a graceful process shutdown. */
+int http_server_exit_requested(void);
+
 /**
  * Restarts the HTTP server on the specified port with a delay (microseconds)
  * between stopping and starting to allow socket cleanup and network stabilization.

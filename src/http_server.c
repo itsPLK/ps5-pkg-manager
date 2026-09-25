@@ -38,10 +38,12 @@ typedef struct {
     char *data;
     size_t size;
     int oversize;
+    int shutdown_after_response;
 } post_state_t;
 
 static struct MHD_Daemon *g_daemon = NULL;
 static volatile int g_server_running = 0;
+static volatile int g_shutdown_requested = 0;
 
 static void add_cors_headers(struct MHD_Response *resp) {
     MHD_add_response_header(resp, "Access-Control-Allow-Origin", "*");
@@ -80,6 +82,7 @@ static void http_request_completed(void *cls, struct MHD_Connection *conn,
     (void)cls; (void)conn; (void)toe;
     if (*con_cls != NULL) {
         post_state_t *ps = (post_state_t *)*con_cls;
+        if (ps->shutdown_after_response) g_shutdown_requested = 1;
         if (ps->data) {
             free(ps->data);
         }
@@ -795,6 +798,21 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         static const char ok_resp[] = "{\"ok\":true}";
         struct MHD_Response *resp = MHD_create_response_from_buffer(
             sizeof(ok_resp) - 1, (void *)ok_resp, MHD_RESPMEM_PERSISTENT);
+        add_cors_headers(resp);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_OK, resp);
+        MHD_destroy_response(resp);
+        return ret;
+    }
+
+    /* ── POST /api/shutdown ───────────────────────────────────── */
+    if (strcmp(method, "POST") == 0 && strcmp(url, "/api/shutdown") == 0) {
+        post_state_t *ps = (post_state_t *)*con_cls;
+        if (ps) ps->shutdown_after_response = 1;
+
+        static const char response_json[] = "{\"success\":true,\"message\":\"Closing PKG Manager\"}";
+        struct MHD_Response *resp = MHD_create_response_from_buffer(
+            sizeof(response_json) - 1, (void *)response_json, MHD_RESPMEM_PERSISTENT);
         add_cors_headers(resp);
         MHD_add_response_header(resp, "Content-Type", "application/json");
         enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_OK, resp);
@@ -1535,6 +1553,10 @@ void http_server_stop(void) {
 
 int http_server_is_running(void) {
     return g_server_running;
+}
+
+int http_server_exit_requested(void) {
+    return g_shutdown_requested;
 }
 
 int http_server_restart_with_delay(int port, unsigned int delay_us) {

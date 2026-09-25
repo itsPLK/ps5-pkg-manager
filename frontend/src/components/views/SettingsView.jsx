@@ -3,7 +3,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { DONATE_URL, isPlayStation } from '../../constants/config';
 import { formatBytes, formatVersion } from '../../utils/formatters';
 
-export default function SettingsView({ settings, onSaveSettings, onClose, onOpenSmb, onInstallShortcut, installingShortcut, cacheStats, loadingStats, onClearCache, leftoversData, scanningLeftovers, onScanLeftovers, onDeleteLeftover, showDonateQr, setShowDonateQr }) {
+export default function SettingsView({ settings, onSaveSettings, onClose, onOpenSmb, onInstallShortcut, onCloseApp, installingShortcut, cacheStats, loadingStats, onClearCache, leftoversData, scanningLeftovers, onScanLeftovers, onDeleteLeftover, showDonateQr, setShowDonateQr }) {
   const safeSettings = settings || {};
   const smbSharesCount = Array.isArray(safeSettings.smb_shares)
     ? safeSettings.smb_shares.length
@@ -153,6 +153,44 @@ export default function SettingsView({ settings, onSaveSettings, onClose, onOpen
                       </svg>
                     </div>
                   </button>
+                </div>
+
+                {/* Home Screen Shortcut Card */}
+                <div className="rounded-[2px] bg-[#141520] border border-white/10 p-6 space-y-4">
+                  <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-10 h-10 rounded-[2px] bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400 shrink-0">
+                        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                          <polyline points="9 22 9 12 15 12 15 22" />
+                        </svg>
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-bold text-white">Home Screen Shortcut</h3>
+                        <p className="text-xs text-zinc-400">Media tab quick launch</p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={onInstallShortcut}
+                      disabled={installingShortcut}
+                      className="px-4 py-2 rounded-[2px] ps5-focus-item bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-colors cursor-pointer flex items-center space-x-2 disabled:opacity-50"
+                    >
+                      {installingShortcut ? (
+                        <>
+                          <div className="ps5-robust-spinner-sm" />
+                          <span>Installing...</span>
+                        </>
+                      ) : (
+                        <span>Install Shortcut</span>
+                      )}
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-zinc-300 leading-relaxed">
+                    Adds a shortcut to the PS5 Media tab to launch PKG Manager directly from the home screen.
+                  </p>
                 </div>
 
                 {/* Support & Donations Card */}
@@ -445,42 +483,34 @@ export default function SettingsView({ settings, onSaveSettings, onClose, onOpen
                   </button>
                 </div>
 
-                {/* Home Screen Shortcut Card */}
+                {/* Close PKG Manager Card */}
                 <div className="rounded-[2px] bg-[#141520] border border-white/10 p-6 space-y-4">
-                  <div className="flex items-center justify-between pb-3 border-b border-white/10">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-10 h-10 rounded-[2px] bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400 shrink-0">
-                        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                          <polyline points="9 22 9 12 15 12 15 22" />
-                        </svg>
-                      </div>
-                      <div>
-                        <h3 className="text-lg font-bold text-white">Home Screen Shortcut</h3>
-                        <p className="text-xs text-zinc-400">Media tab quick launch</p>
-                      </div>
+                  <div className="flex items-center space-x-3 pb-3 border-b border-white/10">
+                    <div className="w-10 h-10 rounded-[2px] bg-rose-600/20 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M10 17l5-5-5-5" />
+                        <path d="M15 12H3" />
+                        <path d="M12 3h6a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-6" />
+                      </svg>
                     </div>
-
-                    <button
-                      type="button"
-                      onClick={onInstallShortcut}
-                      disabled={installingShortcut}
-                      className="px-4 py-2 rounded-[2px] ps5-focus-item bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-colors cursor-pointer flex items-center space-x-2 disabled:opacity-50"
-                    >
-                      {installingShortcut ? (
-                        <>
-                          <div className="ps5-robust-spinner-sm" />
-                          <span>Installing...</span>
-                        </>
-                      ) : (
-                        <span>Install Shortcut</span>
-                      )}
-                    </button>
+                    <div>
+                      <h3 className="text-lg font-bold text-white">Close PKG Manager</h3>
+                      <p className="text-xs text-zinc-400">Stop the server process</p>
+                    </div>
                   </div>
 
                   <p className="text-xs text-zinc-300 leading-relaxed">
-                    Adds a shortcut to the PS5 Media tab to launch PKG Manager directly from the home screen.
+                    Close PKG Manager and stop its server process.
                   </p>
+
+                  <button
+                    type="button"
+                    onClick={onCloseApp}
+                    className="w-full py-3 px-4 rounded-[2px] ps5-focus-item bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/30 text-rose-200 text-sm font-bold transition-colors flex items-center justify-between cursor-pointer"
+                  >
+                    <span>Close PKG Manager</span>
+                    <span>&rarr;</span>
+                  </button>
                 </div>
 
               </div>
