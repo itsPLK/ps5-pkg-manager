@@ -43,7 +43,7 @@ echo "[2/3] Building native ELF via Docker..."
 # Force embedded-helper regeneration regardless of mtimes: blob.S incbins
 # build/install-helper.elf, so a stale helper silently ships old behavior.
 rm -f build/install-helper.elf
-docker run --rm -v "$(pwd)":/src -w /src $IMAGE_NAME make clean all
+docker run --rm -e BUILD_COMMIT="$SHORT_HASH" -v "$(pwd)":/src -w /src $IMAGE_NAME make clean all
 
 echo "      ELF build successful."
 
