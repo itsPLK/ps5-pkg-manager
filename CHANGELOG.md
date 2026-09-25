@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.3.1
+
+### SMB Network Shares
+- Fixed package scanning from the share root so an unreadable subfolder does not prevent scanning accessible folders
+
+### Settings
+- Fixed cache statistics showing zero after reloading the Settings page
+- Added a Close PKG Manager action that stops the server process gracefully
+- Reorganized Settings cards
+
+---
+
 ## v1.3.0
 
 ### Installation
