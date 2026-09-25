@@ -271,6 +271,7 @@ export function useHistoryNavigation(props) {
       setShowSettings(true);
       setShowSmbPage(false);
       setShowDirectInstall(false);
+      if (fetchCacheStats) fetchCacheStats();
     } else if (route.type === 'smb') {
       setShowSettings(false);
       setShowSmbPage(true);
@@ -293,6 +294,7 @@ export function useHistoryNavigation(props) {
     initialRouteAppliedRef.current = true;
   }, [
     drives,
+    fetchCacheStats,
     fetchPackagesForDrive,
     setPackages,
     setSearchQuery,
