@@ -35,8 +35,9 @@ docker run --rm -v $(pwd):/src -w /src ps5-payload-sdk-pkgmgr make clean all
 The resulting `pkgmgr.elf` will be created in the root directory.
 
 The build also creates `build/install-helper.elf` and embeds it in `pkgmgr.elf`.
-Only `pkgmgr.elf` is deployed. The install helper launches directly; no elfldr
-service, loader port, or external helper file is required at runtime.
+Only `pkgmgr.elf` is deployed. Package installs require an elfldr service on
+`127.0.0.1:9021` at runtime. The daemon sends its embedded helper to elfldr;
+the launched process identifies itself as `pkgmgr-inst.elf`.
 
 ### 4. Build a Versioned Development Binary
 To build a versioned development binary (`pkg-manager_v<VERSION>-dev-<SHORT_HASH>.elf`):
@@ -54,8 +55,10 @@ make test
 `make test-install-service` exercises the actual helper protocol in freshly
 executed host processes with stubbed PS5 APIs. It covers consecutive installs,
 single-submission enforcement, native failures, malformed IPC, helper death,
-cancellation, parent disconnection, and graceful/forced child cleanup. This
-does not emulate PS5 `rfork`/ptrace or prove the firmware issue is resolved.
+cancellation, parent disconnection, and graceful/forced child cleanup. It also
+tests the real launcher against a fake elfldr: ELF upload, upload half-close,
+loopback IPC callback, and missing-loader failure. Host tests do not emulate
+the PS5 loader or AppInstUtil, so console validation remains necessary.
 
 For console validation, install at least two packages without restarting the
 manager, then exercise a base/update batch, consecutive Direct Installs, and a
@@ -67,22 +70,19 @@ affected newer firmware.
 
 Enable **PKG install debug** before reproducing the issue. Collect the generated
 `stream_debug_*.txt` report from `/data/pkgmgr/` (or `PKG_DEBUG_DIR`) and the full
-`/api/log` response. Reports retain their existing HTTP/WS events and now also
-contain timestamped `INSTALL_EVENT` records. A single report stays open across
-stream retries and through helper cleanup; names include PID and sequence to
-avoid overwriting same-second attempts. Retention remains 20 stream reports.
+`/api/log` response. Stream reports contain HTTP/WS events and remain open across
+transport retries until helper cleanup finishes. Names include PID and sequence
+to avoid overwriting same-second attempts; retention is 20 stream reports.
 
-Helper diagnostics record the raw firmware query, daemon/helper PIDs, embedded
-helper size/checksum/build, launch stages, IPC protocol sizes, native return
-codes and durations, request URLs, content IDs, status/progress snapshots,
-native error descriptions, timeout/cancel events, and process exit/signal
-status. Native status snapshots are written on changes and every five seconds.
-The report closes after the final outcome and helper cleanup.
+The daemon's recent log includes helper launch, IPC failures, native return codes,
+status changes, and process cleanup. Native status snapshots are written on
+changes and every 30 seconds while unchanged. The helper also writes startup
+and native-call details to `/data/pkgmgr/helper-log.txt`; the daemon copies that
+file into its log when startup or cleanup fails.
 
-`/api/log` retains **65,536 lines** (previously 2,048), up to **32 MiB** in memory,
-and returns the full retained history. The ordinary `install.log` continues to
-store warnings/errors only; the debug report contains successful transitions
-needed to reconstruct an install attempt.
+`/api/log` retains the latest **2,048 lines**, at most **1 MiB** in its fixed
+buffer. The ordinary `install.log` stores warnings/errors only. Stream reports
+no longer duplicate every installer log line.
 
 This compiles and runs tests for:
 - Package parser (`test_pkg_parser`)

@@ -6,7 +6,7 @@ This document provides an in-depth architectural guide to the **PKG Manager** da
 
 ## 1. Architectural Overview
 
-PKG Manager is designed as a persistent native daemon (`pkgmgr.elf`) running in userland on PlayStation 5 (Prospero OS). It couples an embedded web-based control application with an HTTP range-streaming engine and direct integration with Sony's proprietary package installer subsystem (`libSceAppInstUtil.sprx`).
+PKG Manager is designed as a persistent native daemon (`pkgmgr.elf`) running in userland on PlayStation 5 (Prospero OS). It couples an embedded web-based control application with an HTTP range-streaming engine. A fresh helper process calls Sony's proprietary package installer subsystem (`libSceAppInstUtil.sprx`) for each install.
 
 ```mermaid
 flowchart TB
@@ -59,7 +59,9 @@ flowchart TB
 
     %% Left: PS5 OS interactions
     APPINFO <-->|"SQLite Query"| APPDB
-    INSTALLER <-->|"Private IPC: submit / status"| HELPER["Fresh install helper process"]
+    INSTALLER -->|"Embedded ELF upload :9021"| ELFLDR["elfldr"]
+    ELFLDR -->|"Launch"| HELPER["pkgmgr-inst.elf"]
+    INSTALLER <-->|"Loopback IPC :18843"| HELPER
     HELPER -->|"One install per process"| SCE
     INSTALLER -.->|"Disc Swap Prompts"| NOTIF
     SCE -->|"Forward Stream URL"| RECEIVER
@@ -85,14 +87,14 @@ flowchart TB
     class HTTP8844,APPINFO,INSTALLER,SCANNER ctrl;
     class USB,DISC,SMB,DATA stor;
     class SOCKET,WS,VSTREAM strm;
-    class SCE,RECEIVER,APPDB,NOTIF ps5;
+    class ELFLDR,HELPER,SCE,RECEIVER,APPDB,NOTIF ps5;
 ```
 
 ---
 
 ## 2. Network Services Architecture
 
-The daemon exposes three network services on separate TCP ports to isolate interactive UI/API traffic from package streaming and Direct Install uploads:
+The daemon exposes three network services on separate TCP ports to isolate interactive UI/API traffic from package streaming and Direct Install uploads. During helper launch it also opens a loopback-only IPC listener on port 18843; elfldr is a separate service on port 9021.
 
 | Port | Implementation | Primary Role | Features |
 |:---|:---|:---|:---|
@@ -239,21 +241,21 @@ int sceAppInstUtilGetInstallStatus(const char* content_id, SceAppInstallStatusIn
 
 ### Package Metadata & Installation Pipeline
 
-Every package submission runs in a fresh `pkg-install.elf` helper on all
-firmwares. The helper is built separately and embedded in `pkgmgr.elf`.
-`install_service.c` exchanges fixed-size, pointer-free messages over a private
-Unix socket; the helper owns initialization, one package submission, status
+Every package submission runs in a fresh `pkgmgr-inst.elf` helper. The helper
+is built separately and embedded in `pkgmgr.elf`. `install_process.c` sends it
+to elfldr on `127.0.0.1:9021`, then accepts its callback on `127.0.0.1:18843`.
+`install_service.c` exchanges fixed-size, pointer-free messages over that TCP
+connection; the helper owns initialization, one package submission, status
 polling, and termination of its AppInstUtil session. Retries and queued updates
 receive new processes. The daemon retains the HTTP/SMB/WebSocket servers,
 live upload buffers, install state, and browser connection throughout.
 
-`src/helper_process/` contains the launcher adapted from elfldr's process
-creation code. It directly starts a traced SceSpZeroConf process and maps the
-embedded helper after libc initialization. It never connects to elfldr or reads
-another copy of the manager ELF. IPC deadlines, a parent-disconnect watcher,
-and child termination/reaping handle failed or canceled operations. Shortcut
-registration uses a separate helper; existing DLC queries and leftover removal
-retain their independent AppInstUtil client in the daemon.
+The upload socket is half-closed after the ELF bytes are sent so elfldr can
+finish loading while helper stdout remains readable. IPC deadlines, a
+parent-disconnect watcher, and child termination/reaping handle failed or
+canceled operations. Shortcut registration uses a separate helper; existing
+DLC queries and leftover removal retain their independent AppInstUtil client
+in the daemon.
 
 When invoking `sceAppInstUtilInstallByPackage`, `pkg_metadata_t` is populated as follows:
 - **`uri`**: Unique per-install streaming URL (`http://127.0.0.1:18841/stream/install/package-<unixtime>-<seq>.pkg`). Timestamping prevents URI collisions across successive installations.

@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.3.0
+
+### Installation
+- Fixed an issue reported on firmware 9.60 and newer where installing another package required restarting PKG Manager
+
+### SMB Network Shares
+- Added folder browsing so packages on large shares can be installed without scanning the whole share first
+- Stopped repeated automatic scans of SMB shares
+- Split package lists into pages for faster browsing of large libraries
+- Keep saved passwords when editing a share
+
+---
+
 ## v1.2.4
 
 ### Direct Install

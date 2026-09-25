@@ -21,10 +21,11 @@
 - **Installed Version Detection**: Checks your console to display installed application versions and prevent duplicate package installs.
 - **Home Screen Shortcut**: Installs a dedicated shortcut tile to your PS5 home screen for quick and easy access.
 - **Leftover Cleanup**: Detects and cleans up orphaned files and directories commonly left behind on console storage after a database rebuild.
+- **Reliable Repeat Installs**: Runs each package installation in a fresh helper process while the manager stays open.
 
 ## Installation
 
-Download the latest versioned ELF (for example, `pkg-manager_v1.2.4.elf`) from the [Releases](https://github.com/itsPLK/ps5-pkg-manager/releases) page.
+Download the latest versioned ELF (for example, `pkg-manager_v1.3.0.elf`) from the [Releases](https://github.com/itsPLK/ps5-pkg-manager/releases) page.
 
 - **Payload Manager (Recommended)**: Use [Payload Manager](https://github.com/itsPLK/ps5-payload-manager) to launch the downloaded ELF automatically.
 - **Manual ELF Loading**: You can load the downloaded ELF like any other standard ELF payload.
