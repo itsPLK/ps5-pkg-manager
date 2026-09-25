@@ -22,6 +22,7 @@
 ### Cache and Scanning
 - Preserve the metadata and icon cache across routine ELF updates; clear and rescan only when the cache schema changes
 - Switched the Rescan button to run a fast quick rescan instead of rebuilding the full cache
+- Fixed quick rescan dropping unchanged SMB packages when a package was renamed or modified, and added catalog self-healing
 
 ---
 

@@ -117,6 +117,7 @@ typedef struct smb_file_session smb_file_session_t;
 smb_file_session_t *smb_file_session_open(const char *smb_url);
 ssize_t smb_file_session_read(smb_file_session_t *session, void *buf, size_t count, uint64_t offset);
 uint64_t smb_file_session_get_size(smb_file_session_t *session);
+uint64_t smb_file_session_get_mtime(smb_file_session_t *session);
 void smb_file_session_close(smb_file_session_t *session);
 
 #endif /* SMB_CLIENT_H */

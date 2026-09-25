@@ -924,6 +924,7 @@ struct smb_file_session {
     struct smb2fh *fh;
     int local_fd;
     uint64_t file_size;
+    uint64_t mtime;
     char url[512];
     int debug_enabled;
     pthread_mutex_t mutex;
@@ -958,6 +959,7 @@ smb_file_session_t *smb_file_session_open(const char *smb_url) {
 
         s->local_fd = lfd;
         s->file_size = (uint64_t)st.st_size;
+        s->mtime = (uint64_t)st.st_mtime;
         strncpy(s->url, smb_url, sizeof(s->url) - 1);
         pthread_mutex_init(&s->mutex, NULL);
         return s;
@@ -992,8 +994,10 @@ smb_file_session_t *smb_file_session_open(const char *smb_url) {
 
     struct smb2_stat_64 st;
     uint64_t sz = 0;
+    uint64_t mt = 0;
     if (smb2_fstat(ctx, fh, &st) == 0) {
         sz = (uint64_t)st.smb2_size;
+        mt = (uint64_t)st.smb2_mtime;
     }
 
     smb_file_session_t *s = (smb_file_session_t *)calloc(1, sizeof(smb_file_session_t));
@@ -1007,6 +1011,7 @@ smb_file_session_t *smb_file_session_open(const char *smb_url) {
     s->fh = fh;
     s->local_fd = -1;
     s->file_size = sz;
+    s->mtime = mt;
     strncpy(s->url, smb_url, sizeof(s->url) - 1);
     app_settings_t debug_settings;
     pkg_cache_get_settings(&debug_settings);
@@ -1280,6 +1285,10 @@ uint64_t smb_file_session_get_size(smb_file_session_t *session) {
     return session ? session->file_size : 0;
 }
 
+uint64_t smb_file_session_get_mtime(smb_file_session_t *session) {
+    return session ? session->mtime : 0;
+}
+
 void smb_file_session_close(smb_file_session_t *session) {
     if (!session) return;
     pthread_mutex_lock(&session->mutex);
@@ -1385,6 +1394,7 @@ int smb_client_parse_pkg(const char *smb_url, pkg_detail_t *out) {
 
     out->file_size = sess->file_size;
     out->total_pkg_size = sess->file_size;
+    out->mtime = sess->mtime;
 
     uint8_t hdr[0x200];
     ssize_t hdr_read = smb_file_session_read(sess, hdr, sizeof(hdr), 0);

@@ -183,6 +183,129 @@ int main(void) {
         rmdir(path);
     }
     rmdir(root);
+    /* SMB quick scan: package rename and recovery test */
+    char smb_test_root[] = "/tmp/mock_smb/smb-rename-XXXXXX";
+    assert(mkdtemp(smb_test_root));
+    for (int i = 0; i < 5; i++) {
+        char pkg_file[512];
+        snprintf(pkg_file, sizeof(pkg_file), "%s/%04d.pkg", smb_test_root, i);
+        char tid[32], tname[64];
+        snprintf(tid, sizeof(tid), "CUSA9999%d", i);
+        snprintf(tname, sizeof(tname), "Mock Title %d", i);
+        assert(fixture_write_ps4_pkg(pkg_file, tid, tname, "gd", "01.00") == 0);
+    }
+
+    memset(&settings, 0, sizeof(settings));
+    settings.smb_share_count = 1;
+    cfg = &settings.smb_shares[0];
+    cfg->enabled = 1;
+    cfg->port = 445;
+    strcpy(cfg->id, "smb_rename_test");
+    strcpy(cfg->server, "mock");
+    strcpy(cfg->share, "pkgs");
+    strcpy(cfg->path, smb_test_root + strlen("/tmp/mock_smb/"));
+    assert(pkg_cache_set_settings(&settings) == 0);
+
+    pkg_scanner_init();
+    assert(pkg_scanner_scan() == 5);
+    char *json = pkg_scanner_to_json();
+    assert(json);
+    /* Verify mtime is non-zero in json */
+    assert(strstr(json, "\"mtime\":0") == NULL);
+    free(json);
+
+    /* Quick scan when unchanged must return changed == 0 */
+    changed = -1;
+    assert(pkg_scanner_scan_quick("smb_rename_test", &changed) == 5);
+    assert(changed == 0);
+
+    /* Rename 0000.pkg to 0000_renamed.pkg on SMB */
+    char old_path[512], new_path[512];
+    snprintf(old_path, sizeof(old_path), "%s/0000.pkg", smb_test_root);
+    snprintf(new_path, sizeof(new_path), "%s/0000_renamed.pkg", smb_test_root);
+    assert(rename(old_path, new_path) == 0);
+
+    /* Quick scan must reflect rename without losing any other packages */
+    changed = -1;
+    int q_cnt = pkg_scanner_scan_quick("smb_rename_test", &changed);
+    assert(q_cnt == 5);
+    assert(changed == 1);
+
+    json = pkg_scanner_to_json();
+    assert(json);
+    assert(strstr(json, "0000_renamed.pkg") != NULL);
+    assert(strstr(json, "0000.pkg") == NULL);
+    assert(strstr(json, "0001.pkg") != NULL);
+    assert(strstr(json, "0002.pkg") != NULL);
+    assert(strstr(json, "0003.pkg") != NULL);
+    assert(strstr(json, "0004.pkg") != NULL);
+    free(json);
+
+    /* Second quick scan: unchanged, must return changed == 0 */
+    changed = -1;
+    assert(pkg_scanner_scan_quick("smb_rename_test", &changed) == 5);
+    assert(changed == 0);
+
+    /* Test recovery: simulate catalog corruption where g_packages was truncated to 1 package
+     * but g_scanned_files has all 5 files recorded (the exact bug state). */
+    char manifest_path[512];
+    snprintf(manifest_path, sizeof(manifest_path), "%s/manifest.json", cache);
+    FILE *mf = fopen(manifest_path, "r");
+    assert(mf != NULL);
+    fseek(mf, 0, SEEK_END);
+    long mlen = ftell(mf);
+    fseek(mf, 0, SEEK_SET);
+    char *mbuf = (char *)malloc(mlen + 1);
+    assert(mbuf != NULL);
+    assert(fread(mbuf, 1, mlen, mf) == (size_t)mlen);
+    mbuf[mlen] = '\0';
+    fclose(mf);
+
+    char *pkgs = strstr(mbuf, "\"packages\": [");
+    assert(pkgs != NULL);
+    char *first_pkg_end = strstr(pkgs, "},\n    {");
+    if (first_pkg_end) {
+        first_pkg_end[1] = '\n';
+        first_pkg_end[2] = ' ';
+        first_pkg_end[3] = ' ';
+        first_pkg_end[4] = ']';
+        first_pkg_end[5] = '\n';
+        first_pkg_end[6] = '}';
+        first_pkg_end[7] = '\0';
+        mf = fopen(manifest_path, "w");
+        assert(mf != NULL);
+        fputs(mbuf, mf);
+        fclose(mf);
+    }
+    free(mbuf);
+
+    /* Reload corrupted manifest */
+    pkg_scanner_init();
+    assert(pkg_scanner_get_count() == 1);
+
+    /* Next quick scan must detect the missing packages and recover all 5! */
+    changed = -1;
+    assert(pkg_scanner_scan_quick("smb_rename_test", &changed) == 5);
+    assert(changed == 1);
+    json = pkg_scanner_to_json();
+    assert(json);
+    assert(strstr(json, "0000_renamed.pkg") != NULL);
+    assert(strstr(json, "0001.pkg") != NULL);
+    assert(strstr(json, "0002.pkg") != NULL);
+    assert(strstr(json, "0003.pkg") != NULL);
+    assert(strstr(json, "0004.pkg") != NULL);
+    free(json);
+
+    /* Cleanup smb_test_root */
+    unlink(new_path);
+    for (int i = 1; i < 5; i++) {
+        char pkg_file[512];
+        snprintf(pkg_file, sizeof(pkg_file), "%s/%04d.pkg", smb_test_root, i);
+        unlink(pkg_file);
+    }
+    rmdir(smb_test_root);
+    puts("SMB rename and catalog recovery quick scan passed");
+
     pkg_cache_clear();
     char file[512];
     snprintf(file, sizeof(file), "%s/settings.json", cache);

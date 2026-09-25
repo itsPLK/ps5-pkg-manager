@@ -848,6 +848,15 @@ static int parse_pkg_entry(const char *full_path, const char *filename,
     if (!parsed) {
         if (pkg_parser_parse(full_path, out_detail) == 0) {
             parsed = 1;
+            if (out_detail->file_size == 0) {
+                out_detail->file_size = file_size;
+            }
+            if (out_detail->total_pkg_size == 0) {
+                out_detail->total_pkg_size = out_detail->file_size;
+            }
+            if (out_detail->mtime == 0) {
+                out_detail->mtime = mtime;
+            }
             if (checksum[0] != '\0') {
                 pkg_cache_save(checksum, out_detail);
             }
@@ -1444,25 +1453,74 @@ static int scan_quick_single_source(const char *drive_id, const char *drive_labe
     int identical = 0;
     if (cur_files.count == prev_file_count) {
         if (cur_files.count == 0) {
-            if (drive_was_mounted) {
+            if (drive_was_mounted && exist_pkg_count == 0) {
                 identical = 1;
             }
-        } else {
+        } else if (exist_pkg_count > 0 && exist_pkg_count <= cur_files.count) {
             identical = 1;
-            for (size_t f = 0; f < cur_files.count; f++) {
-                int found = 0;
-                for (size_t i = 0; i < g_scanned_file_count; i++) {
-                    if (pkg_matches_drive_path(g_scanned_files[i].path, drive_path) &&
-                        strcmp(cur_files.entries[f].path, g_scanned_files[i].path) == 0 &&
-                        cur_files.entries[f].file_size == g_scanned_files[i].file_size &&
-                        cur_files.entries[f].mtime == g_scanned_files[i].mtime) {
-                        found = 1;
+            /* Verify all packages in g_packages for this drive are still in cur_files */
+            for (size_t i = 0; i < g_package_count; i++) {
+                if (pkg_matches_drive_path(g_packages[i].path, drive_path)) {
+                    if (g_packages[i].mtime == 0) {
+                        identical = 0;
+                        break;
+                    }
+                    int found_cur = 0;
+                    for (size_t f = 0; f < cur_files.count; f++) {
+                        if (strcmp(cur_files.entries[f].path, g_packages[i].path) == 0 &&
+                            cur_files.entries[f].file_size == g_packages[i].file_size) {
+                            int64_t diff = (int64_t)cur_files.entries[f].mtime - (int64_t)g_packages[i].mtime;
+                            if (diff < 0) diff = -diff;
+                            if (diff <= 2 || cur_files.entries[f].mtime == 0) {
+                                found_cur = 1;
+                                break;
+                            }
+                        }
+                    }
+                    if (!found_cur) {
+                        identical = 0;
                         break;
                     }
                 }
-                if (!found) {
-                    identical = 0;
-                    break;
+            }
+
+            /* Verify all cur_files match recorded scanned files and exist in catalog or are multipart secondary parts */
+            if (identical) {
+                for (size_t f = 0; f < cur_files.count; f++) {
+                    int found_scanned = 0;
+                    for (size_t i = 0; i < g_scanned_file_count; i++) {
+                        if (pkg_matches_drive_path(g_scanned_files[i].path, drive_path) &&
+                            strcmp(cur_files.entries[f].path, g_scanned_files[i].path) == 0 &&
+                            cur_files.entries[f].file_size == g_scanned_files[i].file_size) {
+                            int64_t diff = (int64_t)cur_files.entries[f].mtime - (int64_t)g_scanned_files[i].mtime;
+                            if (diff < 0) diff = -diff;
+                            if (diff <= 2 || cur_files.entries[f].mtime == 0 || g_scanned_files[i].mtime == 0) {
+                                found_scanned = 1;
+                                break;
+                            }
+                        }
+                    }
+                    if (!found_scanned) {
+                        identical = 0;
+                        break;
+                    }
+
+                    int found_pkg = 0;
+                    for (size_t i = 0; i < g_package_count; i++) {
+                        if (pkg_matches_drive_path(g_packages[i].path, drive_path) &&
+                            strcmp(cur_files.entries[f].path, g_packages[i].path) == 0) {
+                            found_pkg = 1;
+                            break;
+                        }
+                    }
+                    if (!found_pkg) {
+                        uint32_t part_num = 0;
+                        int is_part = multipart_is_part_filename(cur_files.entries[f].path, 0, &part_num) && part_num > 1;
+                        if (!is_part) {
+                            identical = 0;
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -1519,29 +1577,30 @@ static int scan_quick_single_source(const char *drive_id, const char *drive_labe
         for (size_t i = 0; i < g_package_count; i++) {
             if (pkg_matches_drive_path(g_packages[i].path, drive_path) &&
                 strcmp(file->path, g_packages[i].path) == 0 &&
-                file->file_size == g_packages[i].file_size &&
-                file->mtime == g_packages[i].mtime) {
-                if (updated_pkgs && updated_count < cur_files.count) {
-                    memcpy(&updated_pkgs[updated_count++], &g_packages[i], sizeof(pkg_detail_t));
-                }
-                matched = 1;
-                break;
-            }
-        }
-        if (!matched) {
-            int already_scanned_and_skipped = 0;
-            for (size_t i = 0; i < g_scanned_file_count; i++) {
-                if (pkg_matches_drive_path(g_scanned_files[i].path, drive_path) &&
-                    strcmp(file->path, g_scanned_files[i].path) == 0 &&
-                    file->file_size == g_scanned_files[i].file_size &&
-                    file->mtime == g_scanned_files[i].mtime) {
-                    already_scanned_and_skipped = 1;
+                file->file_size == g_packages[i].file_size) {
+                
+                int64_t diff = (int64_t)file->mtime - (int64_t)g_packages[i].mtime;
+                if (diff < 0) diff = -diff;
+                int mtime_matches = (file->mtime == 0 || g_packages[i].mtime == 0 || diff <= 2);
+
+                if (mtime_matches) {
+                    if (updated_pkgs && updated_count < cur_files.count) {
+                        memcpy(&updated_pkgs[updated_count], &g_packages[i], sizeof(pkg_detail_t));
+                        if (updated_pkgs[updated_count].mtime == 0 && file->mtime != 0) {
+                            updated_pkgs[updated_count].mtime = file->mtime;
+                        }
+                        if (g_packages[i].mtime == 0 && file->mtime != 0) {
+                            g_packages[i].mtime = file->mtime;
+                        }
+                        updated_count++;
+                    }
+                    matched = 1;
                     break;
                 }
             }
-            if (!already_scanned_and_skipped && needs_parsing) {
-                needs_parsing[f] = 1;
-            }
+        }
+        if (!matched && needs_parsing) {
+            needs_parsing[f] = 1;
         }
     }
 
