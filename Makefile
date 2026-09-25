@@ -29,9 +29,6 @@ SRCS_WS := src/ws_upload.c src/ws_stream.c
 SRCS_INSTALL_SERVICE := src/install_service.c src/install_ipc.c \
                         src/install_process.c src/install_helper_blob.S
 INSTALL_HELPER := build/install-helper.elf
-INSTALL_HELPER_SMOKE := build/install-helper-smoke.elf
-INSTALL_HELPER_SMOKE_NET := build/install-helper-smoke-net.elf
-INSTALL_HELPER_SMOKE_APPINST := build/install-helper-smoke-appinst.elf
 OBJS := $(SRCS:.c=.o)
 ELF  := pkgmgr.elf
 
@@ -126,26 +123,6 @@ $(INSTALL_HELPER): Makefile src/install_helper.c src/install_ipc.c include/insta
 		-lSceNetCtl -lSceUserService -lSceSystemService -lSceAppInstUtil -lSceNet
 	$(STRIP) $@
 
-$(INSTALL_HELPER_SMOKE): Makefile src/install_helper_smoke.c
-	mkdir -p build
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ src/install_helper_smoke.c -lpthread
-	$(STRIP) $@
-
-$(INSTALL_HELPER_SMOKE_NET): Makefile src/install_helper_smoke.c
-	mkdir -p build
-	$(CC) $(CFLAGS) $(LDFLAGS) -DINSTALL_HELPER_SMOKE_NET -o $@ src/install_helper_smoke.c -lpthread -lSceNet
-	$(STRIP) $@
-
-$(INSTALL_HELPER_SMOKE_APPINST): Makefile src/install_helper_smoke.c
-	mkdir -p build
-	$(CC) $(CFLAGS) $(LDFLAGS) -DINSTALL_HELPER_SMOKE_APPINST -o $@ src/install_helper_smoke.c -lpthread -lSceAppInstUtil
-	$(STRIP) $@
-
-.PHONY: install-helper-smoke install-helper-smoke-net install-helper-smoke-appinst
-install-helper-smoke: $(INSTALL_HELPER_SMOKE)
-install-helper-smoke-net: $(INSTALL_HELPER_SMOKE_NET)
-install-helper-smoke-appinst: $(INSTALL_HELPER_SMOKE_APPINST)
-
 $(ELF): $(ASSET_HEADERS) $(LIBSMB2) $(SRCS) $(SRCS_WS) $(SRCS_INSTALL_SERVICE) $(INSTALL_HELPER) $(wildcard include/*.h)
 	@echo "Building $(ELF)..."
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $(ELF) $(SRCS) $(SRCS_WS) $(SRCS_INSTALL_SERVICE) $(LIBS)
@@ -153,7 +130,7 @@ $(ELF): $(ASSET_HEADERS) $(LIBSMB2) $(SRCS) $(SRCS_WS) $(SRCS_INSTALL_SERVICE) $
 	$(STRIP) $(ELF)
 
 clean:
-	rm -f $(ELF) $(INSTALL_HELPER) $(INSTALL_HELPER_SMOKE) $(INSTALL_HELPER_SMOKE_NET) $(INSTALL_HELPER_SMOKE_APPINST) pkgmgr_v*.elf pkg-manager_v*.elf $(ASSET_HEADERS) src/*.o $(addprefix tests/,$(TESTS))
+	rm -f $(ELF) $(INSTALL_HELPER) pkgmgr_v*.elf pkg-manager_v*.elf $(ASSET_HEADERS) src/*.o $(addprefix tests/,$(TESTS))
 	rm -rf $(addprefix tests/,$(addsuffix .dSYM,$(TESTS)))
 
 test-install-service:
