@@ -160,6 +160,8 @@ test-install-service:
 	mkdir -p build
 	cc $(TEST_CFLAGS) -DINSTALL_HELPER_TEST -o build/test_install_service tests/test_install_service.c src/install_service.c src/install_ipc.c src/install_helper.c -lpthread
 	./build/test_install_service
+	cc $(TEST_CFLAGS) -o build/test_install_process tests/test_install_process.c tests/install_helper_fixture.S src/install_process.c src/install_ipc.c -lpthread
+	./build/test_install_process
 
 test: $(PARAM_JSON_HEADER) $(ICON0_PNG_HEADER) test-install-service
 	@for t in $(TESTS); do \
