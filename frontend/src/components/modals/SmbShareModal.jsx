@@ -167,11 +167,14 @@ export default function SmbShareModal({
           <div>
             <label className="block font-semibold text-zinc-300 mb-1">Share *</label>
             <div className="flex gap-2">
-              <div className="flex-1 min-w-0 bg-black/50 border border-white/15 rounded-[2px] px-3.5 py-2.5 text-sm font-mono truncate">
-                {isShareValid
-                  ? <span className="text-white">{form.share.trim()}</span>
-                  : <span className="text-zinc-500">Not selected</span>}
-              </div>
+              <input
+                aria-label="Share name"
+                type="text"
+                placeholder="e.g. shared"
+                value={form.share || ''}
+                onChange={(e) => setForm({ ...form, share: e.target.value, path: '' })}
+                className="flex-1 min-w-0 bg-black/50 border border-white/15 rounded-[2px] px-3.5 py-2.5 text-sm font-mono text-white placeholder-zinc-500 focus:outline-none focus:border-white/40"
+              />
               <button
                 type="button"
                 onClick={() => setSharePickerOpen(true)}
@@ -181,6 +184,7 @@ export default function SmbShareModal({
                 Select share
               </button>
             </div>
+            <p className="text-[11px] text-zinc-500 mt-1">Enter the share name directly if the server does not allow listing shares.</p>
             {!isServerValid && (
               <p className="text-[11px] text-zinc-500 mt-1">Enter a server above first.</p>
             )}

@@ -17,6 +17,8 @@ deps/libsmb2/build/
 *_parts/
 
 # Test executables
+tests/test_smb_auth
+tests/test_smb_scan
 tests/test_edge_cases
 tests/test_installer
 tests/test_leftovers

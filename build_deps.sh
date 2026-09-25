@@ -2,8 +2,8 @@
 # Dependency build script for PS5 Payload SDK inside Docker
 # libmicrohttpd 1.0.1 is pinned (only pinned dep). libsmb2 tracks upstream
 # master shallowly; set LIBSMB2_REF to a commit SHA to pin (see Dockerfile.sdk).
-# NOTE: Makefile links deps/libsmb2/build (local); this script warms the SDK
-# target copy. Keep both in sync when bumping libsmb2.
+# This warms an SDK copy for other consumers. PKG Manager builds its pinned
+# submodule plus patches into build/libsmb2 and does not link this SDK copy.
 set -euo pipefail
 
 export PATH="/opt/ps5-payload-sdk/bin:$PATH"

@@ -37,25 +37,38 @@ struct smb2_context *smb2_init_context(void) {
 }
 
 void smb2_destroy_context(struct smb2_context *smb2) {
-    if (smb2) free(smb2);
+    if (smb2) {
+        free((void *)smb2->user);
+        free((void *)smb2->domain);
+        free((void *)smb2->password);
+        free(smb2);
+    }
 }
 
 void smb2_set_timeout(struct smb2_context *smb2, int seconds) { (void)smb2; (void)seconds; }
 void smb2_set_security_mode(struct smb2_context *smb2, uint16_t security_mode) { (void)smb2; (void)security_mode; }
-void smb2_set_user(struct smb2_context *smb2, const char *user) { (void)smb2; (void)user; }
-void smb2_set_password(struct smb2_context *smb2, const char *password) { (void)smb2; (void)password; }
-void smb2_set_domain(struct smb2_context *smb2, const char *domain) { (void)smb2; (void)domain; }
+void smb2_set_user(struct smb2_context *smb2, const char *user) {
+    free((void *)smb2->user); smb2->user = user ? strdup(user) : NULL;
+}
+void smb2_set_password(struct smb2_context *smb2, const char *password) {
+    free((void *)smb2->password); smb2->password = password ? strdup(password) : NULL;
+}
+void smb2_set_domain(struct smb2_context *smb2, const char *domain) {
+    free((void *)smb2->domain); smb2->domain = domain ? strdup(domain) : NULL;
+}
+int (*mock_smb_connect_hook)(struct smb2_context *) = NULL;
 
 int smb2_connect_share(struct smb2_context *smb2, const char *server, const char *share, const char *user) {
     (void)user;
     if (!smb2) return -1;
     (void)server;
     (void)share;
+    if (mock_smb_connect_hook) return mock_smb_connect_hook(smb2);
     return 0;
 }
 
 const char *smb2_get_error(struct smb2_context *smb2) { (void)smb2; return "mock smb error"; }
-int smb2_get_nterror(struct smb2_context *smb2) { (void)smb2; return 0; }
+int smb2_get_nterror(struct smb2_context *smb2) { return smb2 ? smb2->nterror : 0; }
 const char *nterror_to_str(uint32_t status) { (void)status; return "STATUS_SUCCESS"; }
 void smb2_register_error_callback(struct smb2_context *smb2, smb2_error_cb error_cb) { (void)smb2; (void)error_cb; }
 

@@ -397,7 +397,10 @@ static void smb_log_nt_diagnostic(uint32_t nt_err, const char *server, const cha
 }
 
 /* Helper to connect to an SMB share using smb2_context */
-static struct smb2_context *smb_connect(const smb_share_config_t *cfg, char *out_err, size_t err_sz, int verbose) {
+static struct smb2_context *smb_connect_attempt(const smb_share_config_t *cfg, char *out_err,
+                                               size_t err_sz, int verbose, int anonymous,
+                                               uint32_t *out_status) {
+    if (out_status) *out_status = 0;
     if (!cfg) {
         if (out_err && err_sz > 0) snprintf(out_err, err_sz, "Invalid share configuration (missing server/share)");
         if (verbose) install_log("[SMB TEST] ERROR: Invalid share configuration (NULL cfg)");
@@ -432,10 +435,13 @@ static struct smb2_context *smb_connect(const smb_share_config_t *cfg, char *out
         smb2_register_error_callback(ctx, smb_test_error_cb);
     }
 
-    const char *user = (clean_cfg.username[0] != '\0') ? clean_cfg.username : "Guest";
+    const char *user = anonymous ? "" : (clean_cfg.username[0] ? clean_cfg.username : "Guest");
     smb2_set_user(ctx, user);
-    if (clean_cfg.password[0] != '\0') smb2_set_password(ctx, clean_cfg.password);
-    smb2_set_domain(ctx, (clean_cfg.workgroup[0] != '\0') ? clean_cfg.workgroup : "WORKGROUP");
+    smb2_set_domain(ctx, anonymous ? "" : clean_cfg.workgroup);
+    /* NULL selects anonymous NTLM in libsmb2; "" authenticates an account
+     * with an empty password. Set this after user/domain (which may load
+     * credentials from NTLM_USER_FILE). */
+    smb2_set_password(ctx, anonymous ? NULL : clean_cfg.password);
 
     char srv_buf[192];
     if (clean_cfg.port > 0 && clean_cfg.port != SMB_DEFAULT_PORT) {
@@ -447,18 +453,19 @@ static struct smb2_context *smb_connect(const smb_share_config_t *cfg, char *out
     if (verbose) {
         install_log("[SMB TEST] Attempting connection -> server='%s', share='%s', user='%s', domain='%s', pass=%s, sec_mode=0 (server-required signing allowed)",
                     srv_buf, clean_cfg.share, user,
-                    clean_cfg.workgroup[0] ? clean_cfg.workgroup : "WORKGROUP",
-                    clean_cfg.password[0] ? "(configured)" : "(none)");
+                    anonymous ? "" : clean_cfg.workgroup,
+                    anonymous ? "(anonymous)" : (clean_cfg.password[0] ? "(configured)" : "(empty)"));
     }
 
     uint64_t t0 = smb_now_ms();
-    int rc = smb2_connect_share(ctx, srv_buf, clean_cfg.share, user);
+    int rc = smb2_connect_share(ctx, srv_buf, clean_cfg.share, NULL);
     uint64_t elapsed_ms = smb_now_ms() - t0;
 
     if (rc != 0) {
         const char *err = smb2_get_error(ctx);
         if (!err || !*err) err = "Failed to connect to SMB share";
         uint32_t nt_err = (uint32_t)smb2_get_nterror(ctx);
+        if (out_status) *out_status = nt_err;
         const char *nt_str = nterror_to_str(nt_err);
 
         if (verbose) {
@@ -468,7 +475,9 @@ static struct smb2_context *smb_connect(const smb_share_config_t *cfg, char *out
         }
 
         if (out_err && err_sz > 0) {
-            if (nt_err == 0xC000015B) {
+            if (nt_err == SMB2_STATUS_ACCOUNT_DISABLED) {
+                snprintf(out_err, err_sz, "Account '%s' is disabled (0x%08X). Everyone share permissions do not enable guest logon. Enable guest access on the server or use credentials for an enabled account.", user, nt_err);
+            } else if (nt_err == 0xC000015B) {
                 snprintf(out_err, err_sz, "Logon type not granted (0x%08X): The SMB server does not allow this account to connect over the network. Check its remote-access policy or use an account that is allowed to connect.",
                          nt_err);
             } else if (nt_err == 0xC000006D || nt_err == 0xC0000072 || nt_err == 0xC000006E) {
@@ -494,8 +503,32 @@ static struct smb2_context *smb_connect(const smb_share_config_t *cfg, char *out
     if (verbose) {
         install_log("[SMB TEST] -> smb2_connect_share SUCCEEDED (rc=0, elapsed=%llums)",
                     (unsigned long long)elapsed_ms);
+        install_log("[SMB TEST] Negotiated: dialect=0x%04x signing=%d encryption=%d max_read=%u credits=%u",
+                    ctx->dialect, ctx->sign, ctx->seal,
+                    smb2_get_max_read_size(ctx), ctx->credits);
     }
 
+    return ctx;
+}
+
+static struct smb2_context *smb_connect(const smb_share_config_t *cfg, char *out_err,
+                                       size_t err_sz, int verbose) {
+    uint32_t status = 0;
+    struct smb2_context *ctx = smb_connect_attempt(cfg, out_err, err_sz, verbose, 0, &status);
+    if (ctx || !cfg) return ctx;
+
+    smb_share_config_t clean = *cfg;
+    smb_client_sanitize_config(&clean);
+    /* Preserve anonymous-only shares, but never fall back from credentials
+     * the user supplied, or retry transport errors and missing shares. */
+    if (!clean.username[0] && !clean.password[0] &&
+        (status == SMB2_STATUS_ACCESS_DENIED || status == SMB2_STATUS_LOGON_FAILURE ||
+         status == SMB2_STATUS_ACCOUNT_DISABLED || status == SMB2_STATUS_ACCOUNT_RESTRICTION ||
+         status == SMB2_STATUS_LOGON_TYPE_NOT_GRANTED)) {
+        if (verbose) install_log("[SMB TEST] Guest logon rejected; trying anonymous access");
+        /* Keep the Guest failure if both attempts fail (e.g. account disabled). */
+        ctx = smb_connect_attempt(&clean, NULL, 0, verbose, 1, NULL);
+    }
     return ctx;
 }
 

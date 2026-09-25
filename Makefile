@@ -8,12 +8,12 @@ STRIP  := /opt/ps5-payload-sdk/bin/prospero-strip
 
 SDK      := /opt/ps5-payload-sdk
 TARGET   := $(SDK)/target
-ifneq ($(wildcard $(TARGET)/lib/libsmb2.a),)
-LIBSMB2  ?= $(TARGET)/lib/libsmb2.a
-else
-LIBSMB2  ?= deps/libsmb2/build/lib/libsmb2.a
-endif
-INCLUDES := -Iinclude -I$(TARGET)/include -Ideps/libsmb2/include -Ideps/libsmb2/include/smb2
+# Always build the checked-in revision and tracked patches. The SDK may hold
+# an older library with different private structs and unaccelerated signing.
+LIBSMB2  ?= build/libsmb2/lib/libsmb2.a
+SMB2_CMAKE ?= $(SDK)/bin/prospero-cmake
+SMB2_INPUTS := $(wildcard deps/libsmb2/lib/*.[ch] deps/libsmb2/include/*.h deps/libsmb2/include/smb2/*.h deps/libsmb2/libdcerpc/*.[ch] deps/libsmb2/cmake/* deps/libsmb2/cmake/Modules/*) deps/libsmb2/CMakeLists.txt deps/libsmb2/lib/CMakeLists.txt
+INCLUDES := -Iinclude -Ideps/libsmb2/include -Ideps/libsmb2/include/smb2 -I$(TARGET)/include
 LIBS     := $(TARGET)/lib/libmicrohttpd.a \
             $(LIBSMB2) \
             -L$(TARGET)/lib -lpthread \
@@ -57,7 +57,7 @@ LDFLAGS := -Wl,--gc-sections
 # Host test build (uses tests/mock_smb.c instead of real libsmb2; MHD not needed)
 TEST_CFLAGS := -g -O0 -Wall -Wextra -Iinclude -Ideps/libsmb2/include -Ideps/libsmb2/include/smb2 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_THREADSAFE=2 -DSQLITE_OMIT_WAL -DPKGMGR_BUILD_COMMIT=\"$(BUILD_COMMIT)\" -DPKGMGR_BUILD_DATE=\"$(BUILD_DATE)\"
 TEST_SRCS := src/multipart.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c src/miniz.c src/smb_client.c src/smb_debug_log.c src/debug_log_retention.c src/installer.c src/stream_server.c src/stream_debug_log.c src/notification.c src/app_info.c src/icon_blurhash.c src/leftovers.c src/app_diag.c src/app_installer.c src/sqlite3.c tests/mock_smb.c tests/ps5_sim.c src/ws_upload.c src/ws_stream.c tests/ws_test_client.c
-TESTS := test_smb_scan test_pkg_parser test_pkg_scanner test_pkg_cache test_installer test_leftovers test_edge_cases test_multipart test_stream_sim test_ws_upload test_direct_install_e2e test_ws_stream test_ws_stream_far test_parse_mem
+TESTS := test_smb_auth test_smb_scan test_pkg_parser test_pkg_scanner test_pkg_cache test_installer test_leftovers test_edge_cases test_multipart test_stream_sim test_ws_upload test_direct_install_e2e test_ws_stream test_ws_stream_far test_parse_mem
 
 all: $(ELF)
 
@@ -111,11 +111,12 @@ $(FRONTEND_DIST):
 	@echo "ERROR: frontend/dist/index.html not found! Run 'make frontend-build' first."
 	@exit 1
 
-deps/libsmb2/build/lib/libsmb2.a:
-	@echo "Building libsmb2 for PS5..."
-	mkdir -p deps/libsmb2/build && cd deps/libsmb2/build && \
-	/opt/ps5-payload-sdk/bin/prospero-cmake .. -DBUILD_SHARED_LIBS=OFF && \
-	$(MAKE) -j$$(nproc)
+build/libsmb2-src/.prepared: tools/prepare_libsmb2.py $(wildcard patches/libsmb2/*) $(SMB2_INPUTS)
+	$(PYTHON) tools/prepare_libsmb2.py build/libsmb2-src
+
+build/libsmb2/lib/libsmb2.a: build/libsmb2-src/.prepared
+	$(SMB2_CMAKE) -S build/libsmb2-src -B build/libsmb2 -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DENABLE_LIBKRB5=OFF -DENABLE_GSSAPI=OFF -DENABLE_LIBDCERPC=OFF
+	$(MAKE) -C build/libsmb2 -j$$(getconf _NPROCESSORS_ONLN)
 
 $(INSTALL_HELPER): Makefile src/install_helper.c src/install_ipc.c include/install_ipc.h include/install_service.h include/install_appinst.h include/version.h
 	mkdir -p build

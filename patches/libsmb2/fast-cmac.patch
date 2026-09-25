@@ -1,0 +1,8 @@
+--- a/lib/smb2-signing.c
++++ b/lib/smb2-signing.c
+@@ -70,0 +71,2 @@
++
++#include "cmac_accel.h"
+@@ -142,0 +145,2 @@
++
++        if (pkgmgr_cmac_accel(key, msg, msg_len, mac) == 0) return;

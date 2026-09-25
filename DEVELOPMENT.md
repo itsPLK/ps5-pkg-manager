@@ -110,6 +110,10 @@ This compiles and runs tests for:
 
 ### Large SMB share regressions
 
+For live authentication and throughput testing against Windows or Samba, see
+[SMB diagnostics](docs/SMB_DIAGNOSTICS.md). The host probe uses the production
+SMB reader and the patched library without running the installer.
+
 `make test TESTS=test_smb_scan` generates 3,000 small synthetic PKGs in separate
 games, updates and DLC folders, using the real scanner/parser over the local SMB
 transport mock. It checks:
