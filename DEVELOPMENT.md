@@ -81,8 +81,7 @@ and native-call details to `/data/pkgmgr/helper-log.txt`; the daemon copies that
 file into its log when startup or cleanup fails.
 
 `/api/log` retains the latest **2,048 lines**, at most **1 MiB** in its fixed
-buffer. The ordinary `install.log` stores warnings/errors only. Stream reports
-no longer duplicate every installer log line.
+buffer. The ordinary `install.log` stores warnings/errors only.
 
 This compiles and runs tests for:
 - Package parser (`test_pkg_parser`)
