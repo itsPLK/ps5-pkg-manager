@@ -45,6 +45,15 @@ To build a versioned development binary (`pkg-manager_v<VERSION>-dev-<SHORT_HASH
 ./build_release.sh
 ```
 
+### Cache invalidation
+Routine ELF version changes preserve the on-console metadata and icon cache. If
+a change makes those persisted entries incompatible, increment
+`CACHE_SCHEMA_VERSION` in `frontend/src/App.jsx`; that triggers one cache clear
+and catalog scan for each browser profile. The package manifest has its own
+`PKG_MANIFEST_VERSION` in `src/pkg_scanner.c`, which should be incremented when
+the saved catalog format or classification rules require a rescan without
+discarding cached metadata and icons.
+
 ## Running Unit Tests
 
 You can run the full host test suite locally without Docker:

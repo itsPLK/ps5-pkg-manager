@@ -51,7 +51,10 @@ import ClearCacheModal from './components/modals/ClearCacheModal';
 import SmbShareModal from './components/modals/SmbShareModal';
 import DeleteLeftoverModal from './components/modals/DeleteLeftoverModal';
 
-const CACHE_VERSION_STORAGE_KEY = 'pkgmgr_cache_version';
+const CACHE_SCHEMA_STORAGE_KEY = 'pkgmgr_cache_schema_version';
+// Increment only when persisted package metadata or icon cache must be rebuilt.
+// Ordinary ELF releases must leave this unchanged to avoid needless full scans.
+const CACHE_SCHEMA_VERSION = '1';
 
 export default function App() {
   const [isOffline, setIsOffline] = useState(false);
@@ -655,7 +658,7 @@ export default function App() {
 
     const checkOnline = async () => {
       let offline = false;
-      let versionRescanCompleted = false;
+      let cacheSchemaRescanCompleted = false;
       try {
         const v = await checkVersion();
         if (!unmounted) {
@@ -664,31 +667,34 @@ export default function App() {
           document.title = getBrowserTitle(v);
         }
 
-        let previousVersion = null;
+        let previousCacheSchema = null;
         try {
-          previousVersion = localStorage.getItem(CACHE_VERSION_STORAGE_KEY);
+          previousCacheSchema = localStorage.getItem(CACHE_SCHEMA_STORAGE_KEY);
         } catch (e) {}
 
-        // A missing marker is the first launch for this browser; establish a
-        // baseline without discarding a cache whose version is unknown.
-        const versionChanged = Boolean(previousVersion && previousVersion !== v);
-        if (versionChanged && !unmounted) {
+        // A missing marker is the first launch for this browser (including
+        // upgrades from the old app-version marker); preserve its existing cache.
+        const cacheSchemaChanged = Boolean(
+          previousCacheSchema && previousCacheSchema !== CACHE_SCHEMA_VERSION
+        );
+        if (cacheSchemaChanged && !unmounted) {
           try {
             const data = await clearCache();
             if (!data || data.success !== true) {
               throw new Error((data && data.error) || 'Cache clear failed');
             }
-            // Invalidation succeeded even if the browser later loses its scan connection.
-            try { localStorage.setItem(CACHE_VERSION_STORAGE_KEY, v); } catch (e) {}
-            versionRescanCompleted = await refreshAll();
+            // The cache is gone, so record the schema even if the scan request
+            // later disconnects; startup will rebuild the missing manifest.
+            try { localStorage.setItem(CACHE_SCHEMA_STORAGE_KEY, CACHE_SCHEMA_VERSION); } catch (e) {}
+            cacheSchemaRescanCompleted = await refreshAll();
           } catch (err) {
-            showToast('Failed to refresh cache after update: ' + err.message, 'error');
+            showToast('Failed to refresh cache after cache format change: ' + err.message, 'error');
           }
         }
 
         // If invalidation failed, retain the previous marker and retry next startup.
-        if (!versionChanged || versionRescanCompleted) {
-          try { localStorage.setItem(CACHE_VERSION_STORAGE_KEY, v); } catch (e) {}
+        if (!cacheSchemaChanged || cacheSchemaRescanCompleted) {
+          try { localStorage.setItem(CACHE_SCHEMA_STORAGE_KEY, CACHE_SCHEMA_VERSION); } catch (e) {}
         }
       } catch (err) {
         offline = true;
@@ -703,10 +709,10 @@ export default function App() {
       }
 
       // Reattach after a browser reload without starting another scan.
-      if (!versionRescanCompleted) {
+      if (!cacheSchemaRescanCompleted) {
         try {
           const status = await getScanStatus();
-          if (status.is_scanning) versionRescanCompleted = await refreshAll(true);
+          if (status.is_scanning) cacheSchemaRescanCompleted = await refreshAll(true);
         } catch (e) {}
       }
       fetchDrives();
@@ -714,7 +720,7 @@ export default function App() {
       fetchStatus();
       fetchSettings();
 
-      if (!versionRescanCompleted) {
+      if (!cacheSchemaRescanCompleted) {
         if (selectedDriveRef.current) {
           fetchPackagesForDrive(selectedDriveRef.current);
         } else if (settings.all_sources_mode) {

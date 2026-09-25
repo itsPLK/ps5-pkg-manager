@@ -10,6 +10,9 @@
 - Added a Close PKG Manager action that stops the server process gracefully
 - Reorganized Settings cards
 
+### Cache and Scanning
+- Preserve the metadata and icon cache across routine ELF updates; clear and rescan only when the cache schema changes
+
 ---
 
 ## v1.3.0
