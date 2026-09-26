@@ -52,6 +52,9 @@ typedef struct {
     uint64_t total_size;
     int live_fds[STREAM_MAX_TRACKED_FDS]; /* -1 = free slot */
     char session_name[128]; /* pinned *.pkg basename; "" = legacy any-*.pkg */
+    uint8_t *icon_data;
+    size_t icon_size;
+    char icon_name[128]; /* pinned icon basename, e.g. "icon-123-1.png" */
 } stream_session_t;
 
 /* Verbose connection logging is gated behind PKG_DEBUG_STREAM (or
@@ -228,6 +231,29 @@ void stream_server_set_session_name(const char *session_name) {
         const char *base = slash ? slash + 1 : session_name;
         strncpy(g_ss.session_name, base, sizeof(g_ss.session_name) - 1);
         g_ss.session_name[sizeof(g_ss.session_name) - 1] = '\0';
+    }
+    pthread_mutex_unlock(&g_ss.mutex);
+}
+
+void stream_server_set_icon(const uint8_t *icon_data, size_t icon_size, const char *icon_name) {
+    pthread_mutex_lock(&g_ss.mutex);
+    if (g_ss.icon_data) {
+        free(g_ss.icon_data);
+        g_ss.icon_data = NULL;
+    }
+    g_ss.icon_size = 0;
+    g_ss.icon_name[0] = '\0';
+
+    if (icon_data && icon_size > 0 && icon_name && icon_name[0] != '\0') {
+        const char *slash = strrchr(icon_name, '/');
+        const char *base = slash ? slash + 1 : icon_name;
+        g_ss.icon_data = (uint8_t *)malloc(icon_size);
+        if (g_ss.icon_data) {
+            memcpy(g_ss.icon_data, icon_data, icon_size);
+            g_ss.icon_size = icon_size;
+            strncpy(g_ss.icon_name, base, sizeof(g_ss.icon_name) - 1);
+            g_ss.icon_name[sizeof(g_ss.icon_name) - 1] = '\0';
+        }
     }
     pthread_mutex_unlock(&g_ss.mutex);
 }
@@ -646,10 +672,43 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
                       (base[blen - 2] == 'k' || base[blen - 2] == 'K') &&
                       (base[blen - 1] == 'g' || base[blen - 1] == 'G'));
         char pinned[sizeof(g_ss.session_name)];
+        char icon_pinned[sizeof(g_ss.icon_name)];
+        uint8_t *icon_buf = NULL;
+        size_t icon_sz = 0;
         pthread_mutex_lock(&g_ss.mutex);
         strncpy(pinned, g_ss.session_name, sizeof(pinned) - 1);
         pinned[sizeof(pinned) - 1] = '\0';
+        strncpy(icon_pinned, g_ss.icon_name, sizeof(icon_pinned) - 1);
+        icon_pinned[sizeof(icon_pinned) - 1] = '\0';
+        if (icon_pinned[0] != '\0' && strcmp(base, icon_pinned) == 0 && g_ss.icon_data && g_ss.icon_size > 0) {
+            icon_sz = g_ss.icon_size;
+            icon_buf = (uint8_t *)malloc(icon_sz);
+            if (icon_buf) {
+                memcpy(icon_buf, g_ss.icon_data, icon_sz);
+            }
+        }
         pthread_mutex_unlock(&g_ss.mutex);
+
+        if (icon_buf && icon_sz > 0) {
+            char hdr[256];
+            int hlen = snprintf(hdr, sizeof(hdr),
+                                "HTTP/1.1 200 OK\r\n"
+                                "Content-Type: image/png\r\n"
+                                "Content-Length: %zu\r\n"
+                                "Connection: %s\r\n"
+                                "\r\n",
+                                icon_sz, conn_tok);
+            int sres = (hlen > 0) ? send_all(conn, hdr, (size_t)hlen) : -1;
+            if (sres == 0 && is_get) {
+                sres = send_all(conn, (const char *)icon_buf, icon_sz);
+            }
+            free(icon_buf);
+            install_log("[STREAM] conn #%d peer=%s req=%d respond: 200 OK icon '%.100s' (%zu bytes, send=%s elapsed=%llums)",
+                        conn_id, peer, req_no, base, icon_sz, sres == 0 ? "ok" : strerror(errno),
+                        (unsigned long long)(stream_now_ms() - t_start_ms));
+            stream_debug_log_request(conn_id, req_no, peer, method, path, 0, 0, (uint64_t)icon_sz, 200, 0, (uint64_t)icon_sz);
+            return (sres == 0 && keep_wanted) ? SERVE_KEEP : SERVE_CLOSE;
+        }
         if (pinned[0] != '\0') {
             if (strcmp(base, pinned) != 0) {
                 char m404[256];
@@ -1046,6 +1105,12 @@ int stream_server_session_start_ex(const char *pkg_path, const char *session_nam
     g_ss.total_size = vs->total_pkg_size;
     g_ss.listen_fd = fd;
     g_ss.running = 1;
+    if (g_ss.icon_data) {
+        free(g_ss.icon_data);
+        g_ss.icon_data = NULL;
+    }
+    g_ss.icon_size = 0;
+    g_ss.icon_name[0] = '\0';
     if (!session_name || session_name[0] == '\0') {
         g_ss.session_name[0] = '\0';
     } else {
@@ -1060,6 +1125,12 @@ int stream_server_session_start_ex(const char *pkg_path, const char *session_nam
         g_ss.vs = NULL;
         g_ss.total_size = 0;
         g_ss.session_name[0] = '\0';
+        if (g_ss.icon_data) {
+            free(g_ss.icon_data);
+            g_ss.icon_data = NULL;
+        }
+        g_ss.icon_size = 0;
+        g_ss.icon_name[0] = '\0';
         pthread_mutex_unlock(&g_ss.mutex);
         close(fd);
         virtual_stream_close(vs);
@@ -1125,6 +1196,12 @@ static void stream_server_session_stop_internal(int close_log) {
         free(g_ss.vs);
         g_ss.vs = NULL;
     }
+    if (g_ss.icon_data) {
+        free(g_ss.icon_data);
+        g_ss.icon_data = NULL;
+    }
+    g_ss.icon_size = 0;
+    g_ss.icon_name[0] = '\0';
     g_ss.stopping = 0;
     g_ss.total_size = 0;
     g_ss.session_name[0] = '\0';

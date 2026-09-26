@@ -176,17 +176,22 @@ reaped:
 }
 
 int install_service_start(install_service_t *service, const char *uri,
-                          const char *name, pkg_info_t *info,
+                          const char *name, const char *icon_url, pkg_info_t *info,
                           install_service_canceled_fn canceled) {
     install_ipc_request_t request = {.op = INSTALL_IPC_INSTALL};
     install_ipc_response_t response = {0};
     memset(info, 0, sizeof(*info));
     if (service->fd >= 0 || service->pid > 0 || !uri || !name ||
-        strlen(uri) >= sizeof(request.uri) || strlen(name) >= sizeof(request.name))
+        strlen(uri) >= sizeof(request.uri) || strlen(name) >= sizeof(request.name) ||
+        (icon_url && strlen(icon_url) >= sizeof(request.icon_url)))
         return INSTALL_SERVICE_UNAVAILABLE;
     strcpy(request.uri, uri);
     strcpy(request.name, name);
-    install_log("[HELPER] install request uri=%.180s name=%.120s", uri, name);
+    if (icon_url) {
+        strcpy(request.icon_url, icon_url);
+    }
+    install_log("[HELPER] install request uri=%.180s name=%.120s icon_url=%.120s",
+                uri, name, icon_url ? icon_url : "");
     int ret = open_service(service, canceled);
     if (ret == 0) ret = exchange(service, &request, &response, 120000);
     if (ret == 0) {

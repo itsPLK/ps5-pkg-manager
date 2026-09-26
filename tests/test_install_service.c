@@ -67,6 +67,7 @@ int sceAppInstUtilInstallByPackage(const pkg_metadata_t *meta, pkg_info_t *info,
     assert(initialized && playgo);
     assert(strcmp(meta->uri, "http://127.0.0.1/package.pkg") == 0);
     assert(strcmp(meta->content_name, "Fixture") == 0);
+    assert(strcmp(meta->icon_url, "http://127.0.0.1/icon.png") == 0);
     assert(meta->ex_uri[0] == 0 && meta->content_id[0] == 0);
     submitted_metadata = meta;
     if (++submissions > 1 || mode("slot_error")) return (int)0x80B2116Fu;
@@ -131,7 +132,7 @@ static int canceled(void) { return now_ms() >= cancel_at; }
 
 static int start(install_service_t *service, pkg_info_t *info,
                   install_service_canceled_fn cancel_fn) {
-    return install_service_start(service, "http://127.0.0.1/package.pkg", "Fixture", info, cancel_fn);
+    return install_service_start(service, "http://127.0.0.1/package.pkg", "Fixture", "http://127.0.0.1/icon.png", info, cancel_fn);
 }
 
 static void close_reaped(install_service_t *service) {

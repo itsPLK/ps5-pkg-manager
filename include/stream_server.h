@@ -5,6 +5,9 @@
 extern "C" {
 #endif
 
+#include <stdint.h>
+#include <stddef.h>
+
 /* Dedicated raw-socket HTTP server for virtual package streaming.
  * Serves byte ranges of single/multi-part packages with hand-built
  * responses (no libmicrohttpd in this path).
@@ -23,6 +26,10 @@ int stream_server_session_start_ex(const char *pkg_path, const char *session_nam
 
 /* Updates the pinned session filename of a running session. */
 void stream_server_set_session_name(const char *session_name);
+
+/* Sets the icon image data (PNG bytes) and pinned filename (e.g. "icon-123-1.png")
+ * to be served under /stream/install/ during the session. Safe to pass NULL/0 to clear. */
+void stream_server_set_icon(const uint8_t *icon_data, size_t icon_size, const char *icon_name);
 
 /* Stops the listener and closes the virtual stream. Safe to call idle. */
 void stream_server_session_stop(void);

@@ -57,7 +57,7 @@ typedef struct {
 /* Each start launches a fresh helper. The caller owns the session and must
  * close it on every exit, including a failed start, before starting another. */
 int install_service_start(install_service_t *service, const char *uri,
-                          const char *name, pkg_info_t *info,
+                          const char *name, const char *icon_url, pkg_info_t *info,
                           install_service_canceled_fn canceled);
 int install_service_status(install_service_t *service,
                            SceAppInstallStatusInstalled *status);

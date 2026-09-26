@@ -98,6 +98,73 @@ static int fetch_range(const char *host, int port, const char *path,
     return 0;
 }
 
+static int fetch_icon(const char *host, int port, const char *path,
+                      uint8_t **out_body, size_t *out_len, int *out_status,
+                      char *out_ct, size_t out_ct_sz) {
+    char req[1024];
+    snprintf(req, sizeof(req),
+             "GET %s HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n", path);
+
+    struct addrinfo hints, *res = NULL, *rp;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
+    char ps[16]; snprintf(ps, sizeof(ps), "%d", port);
+    if (getaddrinfo(host, ps, &hints, &res) != 0) return -1;
+    int fd = -1;
+    for (rp = res; rp; rp = rp->ai_next) {
+        fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (fd >= 0 && connect(fd, rp->ai_addr, rp->ai_addrlen) == 0) break;
+        close(fd); fd = -1;
+    }
+    freeaddrinfo(res);
+    if (fd < 0) return -1;
+
+    char hdr[8192]; size_t hlen = 0;
+    send(fd, req, strlen(req), 0);
+    for (;;) {
+        char c;
+        ssize_t r = recv(fd, &c, 1, 0);
+        if (r <= 0) break;
+        if (hlen + 1 >= sizeof(hdr)) break;
+        hdr[hlen++] = c;
+        if (hlen >= 4 &&
+            hdr[hlen - 4] == '\r' && hdr[hlen - 3] == '\n' &&
+            hdr[hlen - 2] == '\r' && hdr[hlen - 1] == '\n') break;
+    }
+    hdr[hlen] = '\0';
+
+    int status = 0;
+    sscanf(hdr, "HTTP/1.%*d %d", &status);
+    if (out_status) *out_status = status;
+
+    uint64_t clen = 0;
+    for (char *s = hdr; (s = strstr(s, "\r\n")) != NULL; ) {
+        s += 2;
+        if (strncasecmp(s, "content-length:", 15) == 0)
+            clen = strtoull(s + 15, NULL, 10);
+        if (out_ct && out_ct_sz > 0 && strncasecmp(s, "content-type:", 13) == 0) {
+            const char *val = s + 13;
+            while (*val == ' ') val++;
+            const char *eol = strstr(val, "\r\n");
+            size_t vlen = eol ? (size_t)(eol - val) : strlen(val);
+            if (vlen >= out_ct_sz) vlen = out_ct_sz - 1;
+            strncpy(out_ct, val, vlen);
+            out_ct[vlen] = '\0';
+        }
+    }
+    uint8_t *buf = (uint8_t *)malloc(clen ? clen : 1);
+    size_t got = 0;
+    while (got < clen) {
+        ssize_t r = recv(fd, buf + got, clen - got, 0);
+        if (r <= 0) break;
+        got += (size_t)r;
+    }
+    close(fd);
+    *out_body = buf;
+    *out_len = clen ? got : 0;
+    return 0;
+}
+
 static void write_fixture(void) {
     system("rm -rf " FIX_DIR " && mkdir -p " FIX_DIR);
     assert(fixture_write_ps5_pkg(FIX_PKG, "PPSA90012", "SimGame", "gd",
@@ -244,6 +311,58 @@ static void test_missing_server(void) {
     assert(rc != 0 || st.failures != 0);
 }
 
+static void test_stream_icon(void) {
+    printf("=== Testing stream server icon serving ===\n");
+    write_fixture();
+    assert(stream_server_session_start_ex(FIX_PKG, SESSION) == 0);
+
+    /* 1. Before icon is set, GET icon returns 404 */
+    {
+        uint8_t *body = NULL;
+        size_t len = 0;
+        int status = 0;
+        char content_type[64] = {0};
+        assert(fetch_icon("127.0.0.1", STREAM_SERVER_PORT, "/stream/install/icon-test.png",
+                          &body, &len, &status, content_type, sizeof(content_type)) == 0);
+        assert(status == 404);
+        free(body);
+    }
+
+    /* 2. Set icon and fetch: returns 200 OK, image/png, and matching bytes */
+    uint8_t fake_png[16] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4, 5, 6, 7, 8};
+    stream_server_set_icon(fake_png, sizeof(fake_png), "icon-test.png");
+
+    {
+        uint8_t *body = NULL;
+        size_t len = 0;
+        int status = 0;
+        char content_type[64] = {0};
+        assert(fetch_icon("127.0.0.1", STREAM_SERVER_PORT, "/stream/install/icon-test.png",
+                          &body, &len, &status, content_type, sizeof(content_type)) == 0);
+        assert(status == 200);
+        assert(len == sizeof(fake_png));
+        assert(memcmp(body, fake_png, sizeof(fake_png)) == 0);
+        assert(strstr(content_type, "image/png") != NULL);
+        free(body);
+    }
+
+    /* 3. Unknown icon name returns 404 */
+    {
+        uint8_t *body = NULL;
+        size_t len = 0;
+        int status = 0;
+        char content_type[64] = {0};
+        assert(fetch_icon("127.0.0.1", STREAM_SERVER_PORT, "/stream/install/icon-other.png",
+                          &body, &len, &status, content_type, sizeof(content_type)) == 0);
+        assert(status == 404);
+        free(body);
+    }
+
+    stream_server_session_stop();
+    assert(stream_server_is_running() == 0);
+    printf("  -> stream server icon serving verified\n");
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);   /* flush progress as we go */
     setvbuf(stderr, NULL, _IOLBF, 0);
@@ -306,6 +425,7 @@ int main(int argc, char **argv) {
 
     test_end_to_end();
     test_missing_server();
+    test_stream_icon();
 
     printf("\n>>> ALL STREAM SIMULATION TESTS PASSED! <<<\n");
     return 0;

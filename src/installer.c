@@ -699,6 +699,113 @@ static int is_transient_slot_error(int code) {
 }
 #endif
 
+static int icon_has_png_magic(const uint8_t *data, size_t size) {
+    static const uint8_t png_magic[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    if (!data || size < 8) return 0;
+    return memcmp(data, png_magic, sizeof(png_magic)) == 0;
+}
+
+static uint8_t *extract_pkg_icon(const char *pkg_path, int is_multipart,
+                                 const multipart_header_t *hdr1, const char *title_id,
+                                 size_t *out_size) {
+    if (!pkg_path || !out_size) return NULL;
+    *out_size = 0;
+
+    /* 1. Live upload session (RAM) */
+    if (strncmp(pkg_path, "live:", 5) == 0) {
+        uint8_t *icon_data = NULL;
+        size_t icon_size = 0;
+        if (ws_direct_get_icon(pkg_path + 5, &icon_data, &icon_size) == 0 &&
+            icon_data && icon_size > 0 && icon_has_png_magic(icon_data, icon_size)) {
+            *out_size = icon_size;
+            return icon_data;
+        }
+        free(icon_data);
+    }
+
+    /* 2. Multipart package Part 1 header */
+    if (is_multipart && hdr1 && hdr1->icon_offset > 0 && hdr1->icon_size > 0) {
+        uint8_t *buf = NULL;
+        size_t sz = 0;
+        if (pkg_parser_get_icon(pkg_path, hdr1->icon_offset, hdr1->icon_size, &buf, &sz) == 0 &&
+            buf && sz > 0 && icon_has_png_magic(buf, sz)) {
+            *out_size = sz;
+            return buf;
+        }
+        free(buf);
+    }
+
+    /* 3. Disk/SMB metadata cache */
+    if (strncmp(pkg_path, "live:", 5) != 0) {
+        uint8_t *cached_icon = NULL;
+        size_t cached_sz = 0;
+        if (pkg_cache_get_icon(pkg_path, &cached_icon, &cached_sz) == 0 &&
+            cached_icon && cached_sz > 0 && icon_has_png_magic(cached_icon, cached_sz)) {
+            *out_size = cached_sz;
+            return cached_icon;
+        }
+        free(cached_icon);
+    }
+
+    /* 4. Scanner cache / lookup */
+    if (strncmp(pkg_path, "live:", 5) != 0) {
+        pkg_detail_t detail;
+        if (pkg_scanner_find_by_path(pkg_path, &detail) == 0 &&
+            detail.has_icon && detail.icon_offset > 0 && detail.icon_size > 0) {
+            uint8_t *buf = NULL;
+            size_t sz = 0;
+            if (pkg_parser_get_icon(detail.path, detail.icon_offset, detail.icon_size, &buf, &sz) == 0 &&
+                buf && sz > 0 && icon_has_png_magic(buf, sz)) {
+                *out_size = sz;
+                return buf;
+            }
+            free(buf);
+        }
+    }
+
+    /* 5. Fresh parse (if local file or smb not yet in scanner) */
+    if (strncmp(pkg_path, "live:", 5) != 0) {
+        pkg_detail_t detail;
+        if (pkg_parser_parse(pkg_path, &detail) == 0 &&
+            detail.has_icon && detail.icon_offset > 0 && detail.icon_size > 0) {
+            uint8_t *buf = NULL;
+            size_t sz = 0;
+            if (pkg_parser_get_icon(detail.path, detail.icon_offset, detail.icon_size, &buf, &sz) == 0 &&
+                buf && sz > 0 && icon_has_png_magic(buf, sz)) {
+                *out_size = sz;
+                return buf;
+            }
+            free(buf);
+        }
+    }
+
+    /* 6. Fallback for updates/patches without icon: check installed app icon */
+    if (title_id && title_id[0] != '\0') {
+        char app_icon_path[256];
+        snprintf(app_icon_path, sizeof(app_icon_path), "/user/app/%s/sce_sys/icon0.png", title_id);
+        FILE *f = fopen(app_icon_path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long fsz = ftell(f);
+            if (fsz > 8 && fsz < 10 * 1024 * 1024) {
+                fseek(f, 0, SEEK_SET);
+                uint8_t *ibuf = (uint8_t *)malloc((size_t)fsz);
+                if (ibuf) {
+                    if (fread(ibuf, 1, (size_t)fsz, f) == (size_t)fsz && icon_has_png_magic(ibuf, (size_t)fsz)) {
+                        fclose(f);
+                        *out_size = (size_t)fsz;
+                        return ibuf;
+                    }
+                    free(ibuf);
+                }
+            }
+            fclose(f);
+        }
+    }
+
+    return NULL;
+}
+
 static void *stream_installer_worker(void *arg) {
     (void)arg;
 
@@ -892,11 +999,35 @@ static void *stream_installer_worker(void *arg) {
         stream_server_set_session_name(slash ? slash + 1 : stream_uri);
     }
 
+    char tid[32] = {0};
+    pthread_mutex_lock(&g_installer_mutex);
+    if (g_status.title_id[0] != '\0') {
+        strncpy(tid, g_status.title_id, sizeof(tid) - 1);
+    }
+    pthread_mutex_unlock(&g_installer_mutex);
+    if (tid[0] == '\0' && worker_is_multipart && hdr1.title_id[0] != '\0') {
+        strncpy(tid, hdr1.title_id, sizeof(tid) - 1);
+    }
+
+    size_t extracted_icon_size = 0;
+    uint8_t *extracted_icon = extract_pkg_icon(worker_pkg_path, worker_is_multipart,
+                                               &hdr1, tid, &extracted_icon_size);
+    char icon_uri[1024] = {0};
+    char icon_filename[128] = {0};
+    if (extracted_icon && extracted_icon_size > 0) {
+        snprintf(icon_filename, sizeof(icon_filename), "icon-%lu-%u.png",
+                 (unsigned long)time(NULL), s_stream_seq);
+        snprintf(icon_uri, sizeof(icon_uri), "http://127.0.0.1:%d/stream/install/%s",
+                 STREAM_SERVER_PORT, icon_filename);
+        stream_server_set_icon(extracted_icon, extracted_icon_size, icon_filename);
+    }
+
     pthread_mutex_lock(&g_installer_mutex);
     if (g_cancel_stream || !g_monitor_running) {
         g_pending_pkg_path[0] = '\0';
         pthread_mutex_unlock(&g_installer_mutex);
         install_log("[INSTALLER] Canceled before helper launch");
+        free(extracted_icon);
         ws_live_abort();
         stream_server_session_stop();
         ws_live_destroy();
@@ -914,8 +1045,8 @@ static void *stream_installer_worker(void *arg) {
     g_status.progress_percent = 0.0f;
     pthread_mutex_unlock(&g_installer_mutex);
 
-    install_log("[INSTALLER] Initiating multi-part stream install: URI='%s', name='%s', total_bytes=%llu, parts=%u",
-                stream_uri, disp_name, (unsigned long long)hdr1.total_pkg_size, total_parts);
+    install_log("[INSTALLER] Initiating multi-part stream install: URI='%s', name='%s', icon='%s', total_bytes=%llu, parts=%u",
+                stream_uri, disp_name, icon_uri, (unsigned long long)hdr1.total_pkg_size, total_parts);
 
 #if defined(__Prospero__) || defined(PS5_BUILD)
     install_service_t service = INSTALL_SERVICE_INIT;
@@ -954,10 +1085,19 @@ static void *stream_installer_worker(void *arg) {
                 const char *slash = strrchr(stream_uri, '/');
                 stream_server_set_session_name(slash ? slash + 1 : stream_uri);
             }
+            if (extracted_icon && extracted_icon_size > 0) {
+                snprintf(icon_filename, sizeof(icon_filename), "icon-%lu-%u.png",
+                         (unsigned long)time(NULL), s_stream_seq);
+                snprintf(icon_uri, sizeof(icon_uri), "http://127.0.0.1:%d/stream/install/%s",
+                         STREAM_SERVER_PORT, icon_filename);
+                stream_server_set_icon(extracted_icon, extracted_icon_size, icon_filename);
+            } else {
+                icon_uri[0] = '\0';
+            }
 
-            install_log("[INSTALLER] Retry stream install: URI='%s'", stream_uri);
+            install_log("[INSTALLER] Retry stream install: URI='%s', icon='%s'", stream_uri, icon_uri);
         }
-        ret = install_service_start(&service, stream_uri, disp_name, &info,
+        ret = install_service_start(&service, stream_uri, disp_name, icon_uri, &info,
                                     install_request_canceled);
         rname = installer_strerror(ret);
         install_log("[INSTALLER] Helper pid=%d install returned 0x%08X (%s), content_id='%s'",
@@ -976,6 +1116,7 @@ static void *stream_installer_worker(void *arg) {
         g_pending_pkg_path[0] = '\0';
         pthread_mutex_unlock(&g_installer_mutex);
         install_service_close(&service);
+        free(extracted_icon);
         ws_live_abort();
         stream_server_session_stop();
         ws_live_destroy();
@@ -994,6 +1135,7 @@ static void *stream_installer_worker(void *arg) {
         pthread_mutex_unlock(&g_installer_mutex);
         install_service_close(&service);
         ps5_notify("Install error: 0x%08X (%s)", ret, rname ? rname : "unknown");
+        free(extracted_icon);
         ws_live_abort();
         stream_server_session_stop();
         ws_live_destroy();
@@ -1306,6 +1448,7 @@ static void *stream_installer_worker(void *arg) {
             ps5_notify("Failed to start queued update");
         }
     }
+    free(extracted_icon);
     return NULL;
 }
 

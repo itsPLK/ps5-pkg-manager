@@ -70,6 +70,7 @@ int main(void) {
     size_t log_sz = 0;
     char *log_txt = install_log_get_text(&log_sz);
     assert(strstr(log_txt, "name='WaveCast (base)'") != NULL);
+    assert(strstr(log_txt, "icon='http://127.0.0.1:18841/stream/install/icon-") != NULL);
     free(log_txt);
 
     char *active_json = installer_status_to_json();
@@ -106,6 +107,7 @@ int main(void) {
 
     log_txt = install_log_get_text(&log_sz);
     assert(strstr(log_txt, "name='WaveCast (update v1.04)'") != NULL);
+    assert(strstr(log_txt, "icon='http://127.0.0.1:18841/stream/install/icon-") != NULL);
     free(log_txt);
 
     /* Test 1c: DLC package display name */
@@ -115,8 +117,9 @@ int main(void) {
     assert(wait_for_state(0, 1, 15000) == 0);
     log_txt = install_log_get_text(&log_sz);
     assert(strstr(log_txt, "name='WaveCast DLC (DLC)'") != NULL);
+    assert(strstr(log_txt, "icon='http://127.0.0.1:18841/stream/install/icon-") != NULL);
     free(log_txt);
-    printf("DLC install verified: name contains app title and (DLC)\n");
+    printf("DLC install verified: name contains app title and (DLC), icon URL populated\n");
 
     installer_shutdown();
 
@@ -148,6 +151,9 @@ int main(void) {
     assert(unparsed_res == 0); /* MUST succeed and not return -3 */
 
     assert(wait_for_state(0, 1, 10000) == 0);
+    log_txt = install_log_get_text(&log_sz);
+    assert(strstr(log_txt, "name='Package (base)', icon=''") != NULL);
+    free(log_txt);
     char *unparsed_json = installer_status_to_json();
     printf("Unparsed status JSON: %s\n", unparsed_json);
     assert(strstr(unparsed_json, "Package") != NULL);

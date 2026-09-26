@@ -128,6 +128,7 @@ int install_helper_serve(int fd) {
         if (request.magic != INSTALL_IPC_MAGIC || request.version != INSTALL_IPC_VERSION ||
             !memchr(request.uri, 0, sizeof(request.uri)) ||
             !memchr(request.name, 0, sizeof(request.name)) ||
+            !memchr(request.icon_url, 0, sizeof(request.icon_url)) ||
             !memchr(request.title_id, 0, sizeof(request.title_id)) ||
             !memchr(request.directory, 0, sizeof(request.directory))) {
             helper_phase_log("[HELPER] serve: invalid request header, breaking\n");
@@ -145,9 +146,16 @@ int install_helper_serve(int fd) {
         if (request.op == INSTALL_IPC_INSTALL && !used) {
             used = 1; /* Even a failed call consumes this process. */
             install_request = request;
-            metadata = (pkg_metadata_t){install_request.uri, "", "", "", install_request.name, ""};
-            helper_phase_log("[HELPER] serve: calling sceAppInstUtilInstallByPackage uri=%s name=%s\n",
-                             install_request.uri, install_request.name);
+            metadata = (pkg_metadata_t){
+                install_request.uri,
+                "",
+                "",
+                "",
+                install_request.name,
+                install_request.icon_url
+            };
+            helper_phase_log("[HELPER] serve: calling sceAppInstUtilInstallByPackage uri=%s name=%s icon_url=%s\n",
+                             install_request.uri, install_request.name, install_request.icon_url);
             response.result = sceAppInstUtilInstallByPackage(&metadata, &info, &playgo);
             info.content_id[sizeof(info.content_id) - 1] = '\0';
             response.info = info;
