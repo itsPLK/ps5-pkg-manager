@@ -67,6 +67,11 @@ int main(void) {
     assert(strcmp(st.status_str, "playable") == 0);
     printf("Single-pkg stream install completed: progress=%.1f%%\n", st.progress_percent);
 
+    size_t log_sz = 0;
+    char *log_txt = install_log_get_text(&log_sz);
+    assert(strstr(log_txt, "name='WaveCast (base)'") != NULL);
+    free(log_txt);
+
     char *active_json = installer_status_to_json();
     printf("Final status JSON: %s\n", active_json);
     assert(strstr(active_json, "WaveCast") != NULL);
@@ -98,6 +103,20 @@ int main(void) {
     assert(st.failed == 0);
     assert(strcmp(st.pkg_path, "/tmp/test_installer_fixtures/wc_update.pkg") == 0);
     printf("Native base + update batch completed without browser polling\n");
+
+    log_txt = install_log_get_text(&log_sz);
+    assert(strstr(log_txt, "name='WaveCast (update v1.04)'") != NULL);
+    free(log_txt);
+
+    /* Test 1c: DLC package display name */
+    assert(fixture_write_ps5_pkg("/tmp/test_installer_fixtures/wc_dlc.pkg",
+                                 "PPSA90012", "WaveCast DLC", "ac", "01.000.000", 1) == 0);
+    assert(installer_start("/tmp/test_installer_fixtures/wc_dlc.pkg") == 0);
+    assert(wait_for_state(0, 1, 15000) == 0);
+    log_txt = install_log_get_text(&log_sz);
+    assert(strstr(log_txt, "name='WaveCast DLC (DLC)'") != NULL);
+    free(log_txt);
+    printf("DLC install verified: name contains app title and (DLC)\n");
 
     installer_shutdown();
 

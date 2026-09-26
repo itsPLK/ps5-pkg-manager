@@ -793,38 +793,69 @@ static void *stream_installer_worker(void *arg) {
 
     /* Display name for the system installer UI. The helper retains a copy
        for the native session's lifetime. STREAM_NAME_OVERRIDE (build-time
-       -D) pins one literal for A/B runs; otherwise title ID + kind +
-       version, which never contains the package title. */
+       -D) pins one literal for A/B runs; otherwise app title + kind
+       (e.g. "<title> (base)", "<title> (update v<ver>)", or "<title> (DLC)"). */
     static char disp_name[320];
 #ifdef STREAM_NAME_OVERRIDE
     strncpy(disp_name, STREAM_NAME_OVERRIDE, sizeof(disp_name) - 1);
     disp_name[sizeof(disp_name) - 1] = '\0';
 #else
-    /* Kind word only: no version, no title text. Version-bearing and
-       title-bearing names have been rejected with 0x80A30003 while
-       kind-only forms install cleanly. Snapshot IDs under lock. */
     {
-        char tid_copy[32] = "PKG";
+        char title_copy[256] = {0};
         char kind_copy[16] = "base";
+        char ver_copy[32] = {0};
         pthread_mutex_lock(&g_installer_mutex);
-        if (g_status.title_id[0] != '\0') {
-            strncpy(tid_copy, g_status.title_id, sizeof(tid_copy) - 1);
-            tid_copy[sizeof(tid_copy) - 1] = '\0';
+        if (worker_is_multipart && hdr1.title_name[0] != '\0') {
+            strncpy(title_copy, hdr1.title_name, sizeof(title_copy) - 1);
+            title_copy[sizeof(title_copy) - 1] = '\0';
+        } else if (g_status.title_name[0] != '\0') {
+            strncpy(title_copy, g_status.title_name, sizeof(title_copy) - 1);
+            title_copy[sizeof(title_copy) - 1] = '\0';
         }
-        if (worker_is_multipart) {
+        if (worker_is_multipart && hdr1.pkg_type[0] != '\0') {
             strncpy(kind_copy, hdr1.pkg_type, sizeof(kind_copy) - 1);
             kind_copy[sizeof(kind_copy) - 1] = '\0';
         } else if (g_status.pkg_kind[0] != '\0') {
             strncpy(kind_copy, g_status.pkg_kind, sizeof(kind_copy) - 1);
             kind_copy[sizeof(kind_copy) - 1] = '\0';
         }
+        if (worker_is_multipart && hdr1.app_version[0] != '\0') {
+            strncpy(ver_copy, hdr1.app_version, sizeof(ver_copy) - 1);
+            ver_copy[sizeof(ver_copy) - 1] = '\0';
+        } else if (g_status.pkg_version[0] != '\0') {
+            strncpy(ver_copy, g_status.pkg_version, sizeof(ver_copy) - 1);
+            ver_copy[sizeof(ver_copy) - 1] = '\0';
+        }
         pthread_mutex_unlock(&g_installer_mutex);
+
+        if (title_copy[0] == '\0') {
+            if (clean_pkg_name[0] != '\0') {
+                strncpy(title_copy, clean_pkg_name, sizeof(title_copy) - 1);
+                title_copy[sizeof(title_copy) - 1] = '\0';
+                size_t clen = strlen(title_copy);
+                if (clen > 4 && strcasecmp(title_copy + clen - 4, ".pkg") == 0) {
+                    title_copy[clen - 4] = '\0';
+                }
+            } else {
+                strncpy(title_copy, "Package", sizeof(title_copy) - 1);
+                title_copy[sizeof(title_copy) - 1] = '\0';
+            }
+        }
+
         if (strcasecmp(kind_copy, "update") == 0) {
-            snprintf(disp_name, sizeof(disp_name), "%s (Update)", tid_copy);
+            const char *vptr = ver_copy;
+            while (*vptr == ' ' || *vptr == '\t') vptr++;
+            if (*vptr == 'v' || *vptr == 'V') vptr++;
+            while (*vptr == ' ' || *vptr == '\t') vptr++;
+            if (vptr[0] != '\0') {
+                snprintf(disp_name, sizeof(disp_name), "%s (update v%s)", title_copy, vptr);
+            } else {
+                snprintf(disp_name, sizeof(disp_name), "%s (update)", title_copy);
+            }
         } else if (strcasecmp(kind_copy, "dlc") == 0) {
-            snprintf(disp_name, sizeof(disp_name), "%s (DLC)", tid_copy);
+            snprintf(disp_name, sizeof(disp_name), "%s (DLC)", title_copy);
         } else {
-            snprintf(disp_name, sizeof(disp_name), "%s (Base)", tid_copy);
+            snprintf(disp_name, sizeof(disp_name), "%s (base)", title_copy);
         }
     }
 #endif
