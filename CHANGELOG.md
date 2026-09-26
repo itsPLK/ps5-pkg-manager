@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.3.1
+## v1.4.0
 
 ### SMB Network Shares
 
@@ -18,6 +18,8 @@
 
 ### Installation
 - Fail fast and show a clear error if trying to install a package that no longer exists on storage or Samba
+- Show the game title, update version, or DLC label instead of raw title IDs in console install notifications and download cards
+- Show the package icon on the console's download cards and notifications during installation
 
 ### Cache and Scanning
 - Preserve the metadata and icon cache across routine ELF updates; clear and rescan only when the cache schema changes
