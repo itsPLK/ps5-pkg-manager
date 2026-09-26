@@ -1,5 +1,68 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { ALL_SOURCES_DRIVE } from '../constants/config';
+import { ALL_SOURCES_DRIVE } from '../constants/config.js';
+
+export function getSmbShareFromStorage(driveId) {
+  if (!driveId || typeof window === 'undefined' || !window.localStorage) return null;
+  try {
+    const saved = window.localStorage.getItem('pkgmgr_settings');
+    if (!saved) return null;
+    const parsed = JSON.parse(saved);
+    if (!Array.isArray(parsed?.smb_shares)) return null;
+    const share = parsed.smb_shares.find((s) => {
+      if (!s) return false;
+      if (s.id && s.id === driveId) return true;
+      if (s.label && s.label === driveId) return true;
+      const sServer = (s.server || '').replace(/^smb:\/\/+/i, '').replace(/^[\\/]+|[\\/]+$/g, '');
+      const sShare = (s.share || '').replace(/^[\\/]+|[\\/]+$/g, '');
+      if (sServer && sShare) {
+        const sPort = s.port && Number(s.port) !== 445 ? `:${s.port}` : '';
+        const sPath = `smb://${sServer}${sPort}/${sShare}`;
+        if (sPath === driveId || `smb://${sServer}/${sShare}` === driveId) return true;
+      }
+      return false;
+    });
+    if (!share) return null;
+    const cleanServer = (share.server || '').replace(/^smb:\/\/+/i, '').replace(/^[\\/]+|[\\/]+$/g, '');
+    const cleanShare = (share.share || '').replace(/^[\\/]+|[\\/]+$/g, '');
+    const serverShare = (cleanServer && cleanShare) ? `${cleanServer}/${cleanShare}` : (cleanServer || cleanShare);
+    const label = (share.label && share.label.trim()) || serverShare || share.id || driveId;
+    const portPart = share.port && Number(share.port) !== 445 ? `:${share.port}` : '';
+    const path = (cleanServer && cleanShare) ? `smb://${cleanServer}${portPart}/${cleanShare}` : (share.path || driveId);
+    return {
+      id: share.id || driveId,
+      label,
+      path,
+      type: 'smb',
+      clickable: true,
+      browse_only: Boolean(share.browse_only),
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+export function resolveDrive(driveId, drives = []) {
+  if (!driveId || driveId === '__all__') {
+    return ALL_SOURCES_DRIVE;
+  }
+  if (Array.isArray(drives) && drives.length > 0) {
+    const found = drives.find((d) =>
+      (d.id && d.id === driveId) ||
+      (d.path && d.path === driveId) ||
+      ((d.id || d.path) === driveId)
+    );
+    if (found) return found;
+  }
+  const fromStorage = getSmbShareFromStorage(driveId);
+  if (fromStorage) return fromStorage;
+
+  return {
+    id: driveId,
+    path: driveId,
+    label: driveId,
+    clickable: true,
+  };
+}
 
 export function getRouteFromHash(hash) {
   const clean = (hash || '').replace(/^#\/?/, '').trim();
@@ -149,7 +212,31 @@ export function useHistoryNavigation(props) {
   const drivesRef = useRef(drives);
   useEffect(() => {
     drivesRef.current = drives;
-  }, [drives]);
+    if (!drives || drives.length === 0) return;
+    const cur = selectedDriveRef.current;
+    if (cur && cur.id && cur.id !== '__all__') {
+      const match = drives.find((d) =>
+        (cur.id && d.id === cur.id) ||
+        (cur.path && d.path === cur.path) ||
+        ((d.id || d.path) === (cur.id || cur.path))
+      );
+      if (match) {
+        const isDifferent =
+          match.id !== cur.id ||
+          match.label !== cur.label ||
+          match.path !== cur.path ||
+          match.type !== cur.type ||
+          match.pkg_count !== cur.pkg_count ||
+          match.clickable !== cur.clickable ||
+          match.mounted !== cur.mounted ||
+          Boolean(match.browse_only) !== Boolean(cur.browse_only);
+        if (isDifferent) {
+          setSelectedDrive(match);
+          selectedDriveRef.current = match;
+        }
+      }
+    }
+  }, [drives, setSelectedDrive, selectedDriveRef]);
 
   const showSettingsRef = useRef(showSettings);
   showSettingsRef.current = showSettings;
@@ -252,11 +339,7 @@ export function useHistoryNavigation(props) {
 
     if (driveRoute.type === 'drive') {
       const driveId = driveRoute.driveId || '__all__';
-      const drive = driveId === '__all__'
-        ? ALL_SOURCES_DRIVE
-        : (drivesRef.current.find((d) => (d.id || d.path) === driveId) || {
-            id: driveId, path: driveId, label: driveId, clickable: true
-          });
+      const drive = resolveDrive(driveId, drivesRef.current);
       setShowSettings(false);
       setShowSmbPage(false);
       setShowDirectInstall(false);
@@ -400,17 +483,10 @@ export function useHistoryNavigation(props) {
           selectedTitleIdRef.current = null;
         }
         if (!selectedDriveRef.current || (selectedDriveRef.current.id !== target.driveId && selectedDriveRef.current.path !== target.driveId)) {
-          if (target.driveId === '__all__') {
-            setSelectedDrive(ALL_SOURCES_DRIVE);
-            selectedDriveRef.current = ALL_SOURCES_DRIVE;
-            if (fetchPackagesForDrive) fetchPackagesForDrive(ALL_SOURCES_DRIVE);
-          } else {
-            const found = drivesRef.current?.find((d) => (d.id || d.path) === target.driveId);
-            const driveToSet = found || { id: target.driveId, path: target.driveId, label: target.driveId, clickable: true };
-            setSelectedDrive(driveToSet);
-            selectedDriveRef.current = driveToSet;
-            if (fetchPackagesForDrive) fetchPackagesForDrive(driveToSet);
-          }
+          const driveToSet = resolveDrive(target.driveId, drivesRef.current);
+          setSelectedDrive(driveToSet);
+          selectedDriveRef.current = driveToSet;
+          if (fetchPackagesForDrive) fetchPackagesForDrive(driveToSet);
         }
       } else {
         // 'drives'

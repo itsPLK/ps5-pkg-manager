@@ -24,7 +24,7 @@ import { useSettings } from './hooks/useSettings';
 import { useSmb } from './hooks/useSmb';
 import { useInstaller } from './hooks/useInstaller';
 import { useDonation } from './hooks/useDonation';
-import { useHistoryNavigation } from './hooks/useHistoryNavigation';
+import { useHistoryNavigation, getRouteFromHash, resolveDrive } from './hooks/useHistoryNavigation';
 import { useModalInert } from './hooks/useModalInert';
 import { useDirectUpload } from './hooks/useDirectUpload';
 import { uploadStatus } from './api/directInstall';
@@ -63,6 +63,13 @@ export default function App() {
   
   const [drives, setDrives] = useState([]);
   const [selectedDrive, setSelectedDrive] = useState(() => {
+    if (typeof window !== 'undefined' && window.location?.hash) {
+      const route = getRouteFromHash(window.location.hash);
+      if (route.type === 'drive' || route.type === 'title') {
+        const driveId = route.driveId || '__all__';
+        return resolveDrive(driveId, []);
+      }
+    }
     try {
       const saved = localStorage.getItem('pkgmgr_settings');
       if (saved) {

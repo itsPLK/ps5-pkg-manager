@@ -6,6 +6,7 @@
 
 - Fixed package scanning from the share root so an unreadable subfolder does not prevent scanning accessible folders
 - Fixed guest authentication to try an empty-password Guest login, with anonymous fallback when no credentials are supplied
+- Fixed page reloads on a Samba share package list showing an internal share ID instead of the share name
 - Added clearer errors for disabled accounts and allowed entering share names when the server blocks share listing
 - Reduced SMB signing overhead with hardware AES acceleration and reused encryption setup, while preserving signature verification
 - Build the pinned, patched SMB library with matching headers instead of using an older SDK copy
