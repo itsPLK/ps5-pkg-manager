@@ -79,5 +79,7 @@ export function cancelUploadOnUnload(owner, sessionId) {
 
 export function wsUploadUrl(wsPort) {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  // The Vite dev server proxies /ws/upload to the backend (vite.config.js).
+  if (import.meta.env.DEV) return proto + '://' + window.location.host + '/ws/upload';
   return proto + '://' + window.location.hostname + ':' + wsPort + '/ws/upload';
 }

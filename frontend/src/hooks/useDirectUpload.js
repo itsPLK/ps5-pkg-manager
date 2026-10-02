@@ -1,7 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { initUpload, uploadStatus, cancelUpload, cancelUploadOnUnload, checkUploadEligibility, uploadSessionIcon, wsUploadUrl } from '../api/directInstall';
 import { pollStatus, installPackage } from '../api/installer';
-import { parseLocalPkg } from '../utils/parseLocalPkg';
 import { createSegmentSender } from '../utils/segmentSender';
 
 function getOwner() {
@@ -48,25 +47,22 @@ function waitForMessage(ws, timeoutMs) {
 
 export function useDirectUpload(tabId) {
   const [state, setState] = useState('idle');
-  const [progress, setProgress] = useState(0);
   const [uploadSpeed, setUploadSpeed] = useState(0);
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
-  const [fileName, setFileName] = useState('');
   const [sessionId, setSessionId] = useState('');
-  const [headerReady, setHeaderReady] = useState(false);
-  const [installPath, setInstallPath] = useState('');
-  const [error, setError] = useState('');
-  const [details, setDetails] = useState(null);
-  const [eligibility, setEligibility] = useState(null);
   const [iconUrl, setIconUrl] = useState('');
   const [installing, setInstalling] = useState(false);
-  const selectedFileRef = useRef(null);
-  const iconUrlRef = useRef('');
   const sessionIdRef = useRef(sessionStorage.getItem('directInstallSession') || '');
   const installCalledRef = useRef(false);
   const installStartedRef = useRef(false);
   const cancelRef = useRef(false);
+  // Set only by cancel(), unlike an internal abort such as a failed install start.
+  const userCanceledRef = useRef(false);
+  const startErrorRef = useRef('');
+  // Numbers each upload; cancel() and reset() retire the one in progress so it
+  // cannot touch the session of an upload started after it.
+  const attemptRef = useRef(0);
   const wsRef = useRef(null);
   const statusTimerRef = useRef(null);
   const checkingRef = useRef(false);
@@ -98,6 +94,8 @@ export function useDirectUpload(tabId) {
   }, []);
 
   const reset = useCallback(function () {
+    attemptRef.current++;
+    checkingRef.current = false;
     cancelRef.current = false;
     unloadCancelSentRef.current = false;
     stopStatusPoll();
@@ -109,70 +107,29 @@ export function useDirectUpload(tabId) {
       wsRef.current = null;
     }
     setState('idle');
-    setProgress(0);
     setOffset(0);
     setTotal(0);
-    setFileName('');
     setSessionId('');
-    setHeaderReady(false);
-    setInstallPath('');
-    setError('');
-    setDetails(null);
-    setEligibility(null);
     setInstalling(false);
     installStartedRef.current = false;
-    selectedFileRef.current = null;
     sessionIdRef.current = '';
     sessionStorage.removeItem('directInstallSession');
-    if (iconUrlRef.current) URL.revokeObjectURL(iconUrlRef.current);
-    iconUrlRef.current = '';
     setIconUrl('');
   }, [stopStatusPoll]);
 
-  const selectFile = useCallback(async function (file) {
-    if (sessionId && state !== 'idle') {
-      setError('Start over before choosing another package');
-      return;
-    }
-    if (!file || !/\.pkg$/i.test(file.name) || file.size === 0) {
-      setError('Choose a nonempty .pkg file');
-      return;
-    }
-    const resumeId = sessionIdRef.current;
-    reset();
-    if (resumeId) {
-      sessionIdRef.current = resumeId;
-      sessionStorage.setItem('directInstallSession', resumeId);
-    }
-    setState('reading');
-    setFileName(file.name);
-    setTotal(file.size);
-    try {
-      const parsed = await parseLocalPkg(file);
-      selectedFileRef.current = file;
-      setDetails(parsed);
-      if (parsed.icon_size) {
-        const url = URL.createObjectURL(file.slice(parsed.icon_offset, parsed.icon_offset + parsed.icon_size, 'image/png'));
-        iconUrlRef.current = url;
-        setIconUrl(url);
-      }
-      const checked = await checkUploadEligibility(parsed);
-      setEligibility(checked);
-      setState('selected');
-    } catch (e) {
-      setError(e.message || 'Could not read package details');
-      setState('error');
-    }
-  }, [reset, sessionId, state]);
-
   const cancel = useCallback(async function () {
+    attemptRef.current++;
+    checkingRef.current = false;
     cancelRef.current = true;
+    userCanceledRef.current = true;
     stopStatusPoll();
     if (wsRef.current) {
       try { wsRef.current.close(); } catch (e) {}
       wsRef.current = null;
     }
-    try { await cancelUpload(getOwner(), sessionIdRef.current); } catch (e) {}
+    if (sessionIdRef.current) {
+      try { await cancelUpload(getOwner(), sessionIdRef.current); } catch (e) {}
+    }
     sessionIdRef.current = '';
     sessionStorage.removeItem('directInstallSession');
     setSessionId('');
@@ -182,37 +139,46 @@ export function useDirectUpload(tabId) {
 
   // Polls server upload status for header_ready (install can start as soon
   // as the header is parsed, mid-upload) and keeps offset fresh.
-  const pollHeader = useCallback(function (sid, fileSize) {
+  const pollHeader = useCallback(function (sid, isStale) {
     stopStatusPoll();
+    // Ends the upload with `message`; upload() reports it as a failure.
+    const fail = function (message) {
+      if (isStale()) return;
+      stopStatusPoll();
+      if (cancelRef.current) return;
+      startErrorRef.current = message;
+      cancelRef.current = true;
+      if (wsRef.current) wsRef.current.close();
+    };
     const tick = async function () {
       if (uploadStatusInFlightRef.current) return;
       uploadStatusInFlightRef.current = true;
       try {
         const st = await uploadStatus();
-        if (st && st.session_id && sid && st.session_id !== sid) return;
+        if (isStale()) return;
+        // The session can vanish, e.g. torn down by a previous install's cleanup.
+        if (st && sid && (!st.active || (st.session_id && st.session_id !== sid))) {
+          fail('The console dropped this upload before installing it. Try it again.');
+          return;
+        }
         if (st && typeof st.received === 'number') {
           setOffset(st.received);
-          setProgress(fileSize > 0 ? Math.round((st.received / fileSize) * 100) : 0);
         }
         if (st && st.header_ready) {
-          setHeaderReady(true);
-          setInstallPath('live:' + sid);
           stopStatusPoll();
           if (!installCalledRef.current && !cancelRef.current) {
             installCalledRef.current = true;
             try {
               const current = await pollStatus();
+              if (isStale()) return;
               if (!(current?.is_installing && current.pkg_path === 'live:' + sid)) {
                 await installPackage('live:' + sid);
               }
               setInstalling(true);
               installStartedRef.current = true;
             } catch (e) {
-              setError(e.message || 'Could not start installation');
-              setState('error');
-              cancelRef.current = true;
+              fail(e.message || 'Could not start installation');
               await cancelUpload(getOwner(), sid).catch(function () {});
-              if (wsRef.current) wsRef.current.close();
             }
           }
         }
@@ -224,38 +190,43 @@ export function useDirectUpload(tabId) {
     statusTimerRef.current = setInterval(tick, 2000);
   }, [stopStatusPoll]);
 
-  const upload = useCallback(async function () {
-    const file = selectedFileRef.current;
-    if (!file || !details || !eligibility?.can_install || checkingRef.current) return;
+  // Streams one parsed package ({ file, details, iconUrl }; the caller owns iconUrl).
+  // Resolves to { outcome: 'complete' | 'skipped' | 'failed' | 'canceled', error }.
+  const upload = useCallback(async function (item) {
+    if (!item || !item.file || !item.details || checkingRef.current) return { outcome: 'skipped', error: '' };
+    const file = item.file;
+    const pkg = item.details;
+    const canceled = { outcome: 'canceled', error: '' };
+    const attempt = ++attemptRef.current;
+    const isStale = function () { return attemptRef.current !== attempt; };
+    const halted = function () { return isStale() || cancelRef.current; };
+    cancelRef.current = false;
+    userCanceledRef.current = false;
+    startErrorRef.current = '';
+    setIconUrl(item.iconUrl || '');
     checkingRef.current = true;
     setState('checking');
     try {
-      // An existing session may already have started installation; keep resume possible.
-      if (!sessionIdRef.current) {
-        const checked = await checkUploadEligibility(details);
-        setEligibility(checked);
-        if (!checked.can_install) {
-          setState('selected');
-          return;
-        }
+      const checked = await checkUploadEligibility(pkg);
+      if (isStale() || userCanceledRef.current) return canceled;
+      if (!checked.can_install) {
+        setState('idle');
+        return { outcome: 'skipped', error: checked.install_disabled_reason || '' };
       }
     } catch (e) {
-      setError(e.message || 'Could not check package installation');
-      setState('selected');
-      return;
+      if (isStale()) return canceled;
+      setState('error');
+      return { outcome: 'failed', error: e.message || 'Could not check package installation' };
     } finally {
-      checkingRef.current = false;
+      if (!isStale()) checkingRef.current = false;
     }
     try {
       const lease = JSON.parse(localStorage.getItem('directInstallLease') || '{}');
       if (lease.tab && lease.tab !== tabId && Date.now() - lease.time < 10000) {
-        setError('Direct Install is active in another window');
-        setState('selected');
-        return;
+        setState('error');
+        return { outcome: 'failed', error: 'Direct Install is active in another window' };
       }
     } catch (e) {}
-    cancelRef.current = false;
-    setFileName(file.name);
     setTotal(file.size);
     setState('uploading');
     setUploadSpeed(0);
@@ -271,7 +242,6 @@ export function useDirectUpload(tabId) {
       setUploadSpeed(rate.lastAt && now - rate.lastAt <= 1500 && activeUs > 0
         ? receivedBytes * 1000000 / activeUs : 0);
     }, 500);
-    setError('');
     installCalledRef.current = false;
     installStartedRef.current = false;
     const SEG = 1024 * 1024;
@@ -316,7 +286,7 @@ export function useDirectUpload(tabId) {
     const installDispatcher = function () {
       lastActivityAt = Date.now();
       ws.onmessage = function (ev) {
-        if (typeof ev.data !== 'string' || done || cancelRef.current) return;
+        if (typeof ev.data !== 'string' || done || halted()) return;
         lastActivityAt = Date.now();
         let msg = null;
         try {
@@ -334,7 +304,6 @@ export function useDirectUpload(tabId) {
           if (!ackedSet.has(msg.seg)) {
             ackedSet.add(msg.seg);
             setOffset(Math.min(file.size, ackedSet.size * SEG));
-            setProgress(Math.round((ackedSet.size / NSEGS) * 100));
           }
           sender.ack(msg.seg);
         } else if (msg.op === 'busy' && typeof msg.seg === 'number') {
@@ -389,7 +358,7 @@ export function useDirectUpload(tabId) {
     // Pending work or a heartbeat must receive a reply within 60 s.
     const watchTraffic = function () {
       watchdogTimer = setInterval(function () {
-        if (done || cancelRef.current) {
+        if (done || halted()) {
           if (watchdogTimer) {
             clearInterval(watchdogTimer);
             watchdogTimer = null;
@@ -410,7 +379,7 @@ export function useDirectUpload(tabId) {
     // A successful install may not consume every package segment.
     const watchFinish = function () {
       finishTimer = setInterval(async function () {
-        if (done || finished || cancelRef.current) {
+        if (done || finished || halted()) {
           if (finishTimer) {
             clearInterval(finishTimer);
             finishTimer = null;
@@ -453,20 +422,44 @@ export function useDirectUpload(tabId) {
       }, 2000);
     };
 
+    // Stops this upload's own timers and socket. The shared status poll, speed
+    // meter and socket ref are left alone once a newer upload owns them.
+    const cleanup = function () {
+      if (sender) sender.stop();
+      if (finishTimer) clearInterval(finishTimer);
+      if (watchdogTimer) clearInterval(watchdogTimer);
+      finishTimer = null;
+      watchdogTimer = null;
+      if (ws) {
+        try { ws.close(); } catch (e) {}
+      }
+      if (isStale()) return;
+      stopStatusPoll();
+      if (speedTimerRef.current) clearInterval(speedTimerRef.current);
+      speedTimerRef.current = null;
+      setUploadSpeed(0);
+      wsRef.current = null;
+    };
+
     try {
-      const init = await initUpload(file.name, file.size, getOwner(), sessionIdRef.current, details || {});
+      const init = await initUpload(file.name, file.size, getOwner(), sessionIdRef.current, pkg);
+      if (isStale() || userCanceledRef.current) {
+        // Canceled while the session was being created: release it now.
+        if (init.session_id) await cancelUpload(getOwner(), init.session_id).catch(function () {});
+        throw new Error('Canceled');
+      }
       baselineSeg = Math.ceil((init.offset || 0) / SEG);
       for (let s = 0; s < baselineSeg; s++) ackedSet.add(s);
       sessionIdRef.current = init.session_id || '';
       sessionStorage.setItem('directInstallSession', sessionIdRef.current);
       setSessionId(init.session_id || '');
       setOffset(Math.min(file.size, baselineSeg * SEG));
-      setProgress(file.size > 0 ? Math.round((Math.min(file.size, baselineSeg * SEG) / file.size) * 100) : 0);
-      if (init.session_id && details?.icon_size) {
-        const icon = file.slice(details.icon_offset, details.icon_offset + details.icon_size, 'image/png');
+      if (init.session_id && pkg.icon_size) {
+        const icon = file.slice(pkg.icon_offset, pkg.icon_offset + pkg.icon_size, 'image/png');
         try { await uploadSessionIcon(getOwner(), init.session_id, icon); } catch (e) {}
       }
-      if (init.session_id) pollHeader(init.session_id, file.size);
+      if (isStale() || userCanceledRef.current || cancelRef.current) throw new Error('Canceled');
+      if (init.session_id) pollHeader(init.session_id, isStale);
 
       ws = new WebSocket(wsUploadUrl(init.ws_port || 18842));
       wsRef.current = ws;
@@ -500,7 +493,7 @@ export function useDirectUpload(tabId) {
           ws.send(JSON.stringify({ op: 'seg', seg: segment }));
           ws.send(buffer);
         },
-        shouldStop: () => done || finished || cancelRef.current,
+        shouldStop: () => done || finished || halted(),
         onError: fail
       });
       installDispatcher();
@@ -508,50 +501,17 @@ export function useDirectUpload(tabId) {
       watchFinish();
       await sender.pump();
       await completion;
-      sender.stop();
-      if (finishTimer) {
-        clearInterval(finishTimer);
-        finishTimer = null;
-      }
-      if (watchdogTimer) {
-        clearInterval(watchdogTimer);
-        watchdogTimer = null;
-      }
-      stopStatusPoll();
-      if (speedTimerRef.current) clearInterval(speedTimerRef.current);
-      speedTimerRef.current = null;
-      setUploadSpeed(0);
-      try { ws.close(); } catch (e) {}
-      wsRef.current = null;
-
-      if (init.session_id) setInstallPath('live:' + init.session_id);
+      cleanup();
+      if (isStale()) return canceled;
       setState('complete');
+      return { outcome: 'complete', error: '' };
     } catch (e) {
-      if (sender) sender.stop();
-      if (finishTimer) {
-        clearInterval(finishTimer);
-        finishTimer = null;
-      }
-      if (watchdogTimer) {
-        clearInterval(watchdogTimer);
-        watchdogTimer = null;
-      }
-      stopStatusPoll();
-      if (speedTimerRef.current) clearInterval(speedTimerRef.current);
-      speedTimerRef.current = null;
-      setUploadSpeed(0);
-      if (ws) {
-        try { ws.close(); } catch (err) {}
-        wsRef.current = null;
-      }
-      if (!cancelRef.current) {
-        setError(e.message || 'Upload failed');
-        setState('error');
-      }
+      cleanup();
+      if (isStale() || userCanceledRef.current) return canceled;
+      setState('error');
+      return { outcome: 'failed', error: startErrorRef.current || e.message || 'Upload failed' };
     }
-  }, [details, eligibility, pollHeader, tabId]);
+  }, [pollHeader, tabId]);
 
-  return { state, progress, offset, total, uploadSpeed, fileName, sessionId, headerReady,
-    installPath, error, details, eligibility, iconUrl, installing, selectFile, upload, cancel, reset,
-    owner: getOwner() };
+  return { state, offset, total, uploadSpeed, sessionId, iconUrl, installing, upload, cancel, reset };
 }

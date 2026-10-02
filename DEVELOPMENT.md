@@ -20,6 +20,17 @@ You must build the React UI first. This compiles the JSX into the single-file bu
 make frontend-build
 ```
 
+To iterate on the UI against a running console, point the Vite dev server at it.
+API calls and the Direct Install upload socket (`PKG_BACKEND_WS_PORT`, default
+18842) are proxied to that host:
+```bash
+cd frontend && PKG_BACKEND=192.168.1.50:8844 npm run dev
+```
+
+Hot reload resets the page's state, including a running Direct Install queue,
+while the upload it started keeps going unseen. When testing installs, add
+`PKG_NO_HMR=1` so code edits only apply after a manual reload.
+
 ### 2. Build the SDK Docker Image
 If you haven't already, build the PS5 payload SDK Docker container:
 ```bash

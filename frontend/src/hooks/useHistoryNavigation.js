@@ -395,12 +395,8 @@ export function useHistoryNavigation(props) {
   // Listen to popstate (triggered by controller Circle button or browser back/forward)
   useEffect(() => {
     const handlePopState = () => {
-      if (showDirectInstallRef.current && directTransferActiveRef.current) {
-        if (!window.confirm('A direct installation is in progress. Leave this page?')) {
-          writeHistory({ type: 'direct-install' }, false);
-          return;
-        }
-      }
+      // A running direct-install queue keeps going in the background and
+      // shows progress in the header, so leaving its page needs no prompt.
       // 1. If install/stream task is in progress, close the PS5 browser on Circle press
       if (isInstallingRef.current && !directTransferActiveRef.current) {
         try {
@@ -691,10 +687,6 @@ export function useHistoryNavigation(props) {
   }, [setShowDirectInstall, setShowSettings, setShowSmbPage]);
 
   const handleCloseDirectInstall = useCallback(() => {
-    if (directTransferActiveRef.current &&
-        !window.confirm('A direct installation is in progress. Leave this page?')) {
-      return;
-    }
     setShowDirectInstall(false);
     setShowSettings(false);
     setShowSmbPage(false);

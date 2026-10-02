@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Direct Install
+- Added an install queue: add several .pkg files or whole folders (drag and drop or browse) and install them first in, first out. Games install one at a time in the order they were queued, each as base, then update, then DLC, and every queued package shows its position
+- Packages are grouped by game, with per-game and per-package queueing, filters (Ready, Queued, Installed, Problems) and the reason a package cannot be installed shown in its row
+- An update or DLC can be queued together with its base package before the base is installed
+- Failed packages can be checked again and re-queued
+- Skip cancels only the package being installed and continues with the rest of the queue (not available for direct-storage installs, which the console cannot cancel)
+- Files that are not readable packages are skipped with a summary instead of being listed
+- Installation progress is shown next to the queue, with overall queue progress and remaining time, in the browser tab title, and in a bar at the top of the app while browsing elsewhere. Direct installs no longer take over the whole screen; one started elsewhere shows as an ongoing installation, flagged as stalled if the console stops receiving data
+- Warns before starting a queue that needs more space than is free, and summarizes the result when the queue ends
+
 ## v1.4.1
 
 - Fixed USB and disc installs failing when the console had no active network connection. Installation progress is not shown in PKG Manager in this mode due to a PS5 system limitation.

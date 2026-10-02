@@ -2,9 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   getRouteFromHash,
-  formatHash,
   resolveDrive,
-  getSmbShareFromStorage,
 } from '../src/hooks/useHistoryNavigation.js';
 import { ALL_SOURCES_DRIVE } from '../src/constants/config.js';
 

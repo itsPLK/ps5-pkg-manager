@@ -1,21 +1,15 @@
 import SmbFileBrowser from './components/views/SmbFileBrowser';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { QRCodeSVG } from 'qrcode.react';
-import BlurIcon, { iconUrlFor } from './BlurIcon';
-import { formatBytes, formatEta, formatVersion } from './utils/formatters';
+import { formatVersion } from './utils/formatters';
 import { getSourceInfo } from './utils/sourceInfo';
-import { getBrowserTitle, getFullVersion, getLocalizedTitle } from './utils/title';
-import { DONATE_URL, isPlayStation, DONATE_MODAL_STORAGE_KEY, DONATE_MODAL_INTERVAL_MS, ALL_SOURCES_DRIVE } from './constants/config';
+import { getBrowserTitle, getLocalizedTitle } from './utils/title';
+import { isPlayStation, ALL_SOURCES_DRIVE } from './constants/config';
 import { checkVersion } from './api/health';
 import { getStorage } from './api/storage';
 import { getDrives } from './api/drives';
 import { getPackages, refreshPackages, getScanStatus, waitForScan, quickScan, shouldAutoScanDrive } from './api/packages';
-import { pollStatus, installPackage, cancelInstall } from './api/installer';
-import { getSettings, saveSettings, closeManager } from './api/settings';
-import { installShortcut as apiInstallShortcut } from './api/settings';
-import { getCacheStats, clearCache } from './api/cache';
-import { scanLeftovers as apiScanLeftovers, deleteLeftover } from './api/leftovers';
-import { testSmb } from './api/smb';
+import { closeManager } from './api/settings';
+import { clearCache } from './api/cache';
 
 import { useToast } from './hooks/useToast';
 import { useCache } from './hooks/useCache';
@@ -27,6 +21,10 @@ import { useDonation } from './hooks/useDonation';
 import { useHistoryNavigation, getRouteFromHash, resolveDrive } from './hooks/useHistoryNavigation';
 import { useModalInert } from './hooks/useModalInert';
 import { useDirectUpload } from './hooks/useDirectUpload';
+import { useDirectQueue } from './hooks/useDirectQueue';
+import { useDirectInstallMonitor } from './hooks/useDirectInstallMonitor';
+import { collectDroppedPkgFiles } from './utils/collectPkgFiles';
+import { isLiveInstall } from './utils/directQueue';
 import { uploadStatus } from './api/directInstall';
 
 import OfflineScreen from './components/screens/OfflineScreen';
@@ -46,6 +44,7 @@ import PackageGridView from './components/views/PackageGridView';
 import DrivesView from './components/views/DrivesView';
 
 import DirectInstallView from './components/views/DirectInstallView';
+import DirectQueueBar from './components/layout/DirectQueueBar';
 import DonateModal from './components/modals/DonateModal';
 import ClearCacheModal from './components/modals/ClearCacheModal';
 import SmbShareModal from './components/modals/SmbShareModal';
@@ -93,9 +92,11 @@ export default function App() {
   const [showDirectInstall, setShowDirectInstall] = useState(false);
   const directTabId = useRef(Math.random().toString(36).slice(2) + Date.now());
   const directUpload = useDirectUpload(directTabId.current);
-  const directTransferActive = directUpload.state === 'uploading' || directUpload.installing;
-  const directLeaseHeld = Boolean(directUpload.sessionId) &&
-    directUpload.state !== 'idle' && directUpload.state !== 'canceled';
+  const directQueue = useDirectQueue(directUpload);
+  const directTransferActive = directUpload.state === 'uploading' || directUpload.installing || directQueue.running;
+  // Held for a whole queue run, including the gaps between packages.
+  const directLeaseHeld = directQueue.running || (Boolean(directUpload.sessionId) &&
+    directUpload.state !== 'idle' && directUpload.state !== 'canceled');
 
   useEffect(() => {
     if (!directLeaseHeld) return;
@@ -624,15 +625,14 @@ export default function App() {
     if (isPlayStation) return false;
     try {
       const status = await uploadStatus();
-      if (status.active) {
-        let lease = {};
-        try { lease = JSON.parse(localStorage.getItem('directInstallLease') || '{}'); } catch (e) {}
-        const anotherWindow = lease.tab && lease.tab !== directTabId.current && Date.now() - lease.time < 10000;
-        const anotherSession = status.session_id !== sessionStorage.getItem('directInstallSession');
-        if (anotherWindow || anotherSession) {
-          window.alert('Direct Install is already active in another window. Finish it there first.');
-          return false;
-        }
+      let lease = {};
+      try { lease = JSON.parse(localStorage.getItem('directInstallLease') || '{}'); } catch (e) {}
+      const anotherWindow = lease.tab && lease.tab !== directTabId.current && Date.now() - lease.time < 10000;
+      // The lease also covers the gaps between another window's queued packages.
+      const anotherSession = status.active && status.session_id !== sessionStorage.getItem('directInstallSession');
+      if (anotherWindow || anotherSession) {
+        window.alert('Direct Install is already active in another window. Finish it there first.');
+        return false;
       }
     } catch (e) {
       showToast('Could not check Direct Install status', 'error');
@@ -656,11 +656,12 @@ export default function App() {
       event.preventDefault();
       event.__pkgManagerDropHandled = true;
 
-      // Keep the current page and upload session intact while an install is active.
-      if (directUpload.state === 'uploading' || directUpload.state === 'checking' || directUpload.installing) return;
-
-      const file = event.dataTransfer.files[0];
-      if (await openDirectInstall()) directUpload.selectFile(file);
+      // Adding to the queue never disturbs an active upload session.
+      const found = collectDroppedPkgFiles(event.dataTransfer);
+      if (!showDirectInstall && !(await openDirectInstall())) return;
+      const { files, unreadable } = await found;
+      if (!files.length && !unreadable.length) showToast('No .pkg files found in the dropped items', 'error');
+      else directQueue.addFiles(files, unreadable);
     };
 
     window.addEventListener('dragover', onDragOver);
@@ -669,10 +670,10 @@ export default function App() {
       window.removeEventListener('dragover', onDragOver);
       window.removeEventListener('drop', onDrop);
     };
-  }, [directUpload.installing, directUpload.selectFile, directUpload.state, isPlayStation, openDirectInstall]);
+  }, [directQueue.addFiles, isPlayStation, openDirectInstall, showDirectInstall, showToast]);
 
   useEffect(() => {
-    if (!showDirectInstall || directUpload.sessionId) return;
+    if (!showDirectInstall || directUpload.sessionId || directQueue.running) return;
     let stopped = false;
     let checking = false;
     const check = async () => {
@@ -696,7 +697,7 @@ export default function App() {
     check();
     const timer = setInterval(check, 3000);
     return () => { stopped = true; clearInterval(timer); };
-  }, [directUpload.sessionId, showDirectInstall]);
+  }, [directQueue.running, directUpload.sessionId, showDirectInstall]);
 
   const isAnyModalOpen = Boolean(
     showDonateModal ||
@@ -812,6 +813,26 @@ export default function App() {
     }
   }, [installerStatus.is_installing, isBatchActive]);
 
+  const guardDirectQueue = (install) => (...args) => {
+    if (directQueue.running) {
+      showToast('Direct Install queue is running. Install this after it finishes.', 'warning');
+      return undefined;
+    }
+    return install(...args);
+  };
+  const installFromLibrary = guardDirectQueue(handleInstall);
+  const installBaseAndUpdateFromLibrary = guardDirectQueue(handleInstallBaseAndUpdate);
+
+  const directMonitor = useDirectInstallMonitor({
+    queue: directQueue,
+    upload: directUpload,
+    installerStatus,
+    speed: speedCalcRef.current.speed,
+    appVersion,
+    cancelInstall: handleCancel,
+    showToast,
+  });
+
   useEffect(() => {
     if (isOffline) return;
     // Poll individual local drives; network discovery runs on explicit navigation/rescan.
@@ -896,8 +917,9 @@ export default function App() {
     />;
   }
 
-  // Active installation overlay.
-  if (isInstalling && !directInstallScreenDismissed) {
+  // Active installation overlay. Direct installs show on the Direct Install page
+  // and in the header bar instead.
+  if (isInstalling && !directInstallScreenDismissed && !isLiveInstall(installerStatus)) {
     return <InstallingScreen
       installerStatus={installerStatus}
       batchInstall={batchInstall}
@@ -943,10 +965,7 @@ export default function App() {
         showSettings={showSettings}
         showSmbPage={showSmbPage}
         onSettingsClick={() => {
-          if (showDirectInstall) {
-            if (directTransferActive && !window.confirm('A direct installation is in progress. Leave this page?')) return;
-            setShowDirectInstall(false);
-          }
+          if (showDirectInstall) setShowDirectInstall(false);
           if (showSmbPage) {
             handleCloseSmb();
             return;
@@ -962,6 +981,10 @@ export default function App() {
         selectedDrive={selectedDrive}
         onBackToDrives={handleBackToDrives}
       />
+      {(directQueue.running || directMonitor.ongoingInstall) && !showDirectInstall && (
+        <DirectQueueBar overview={directMonitor.overview} ongoing={directMonitor.ongoingInstall}
+          stalled={directMonitor.ongoingStalled} onOpen={openDirectInstall} />
+      )}
 
       {/* Main Container */}
       <main className="w-full px-4 py-4 flex-1 space-y-6">
@@ -969,6 +992,9 @@ export default function App() {
           <DirectInstallView
             onBack={handleCloseDirectInstall}
             up={directUpload}
+            queue={directQueue}
+            monitor={directMonitor}
+            etaInfo={etaInfo}
             storage={storage}
             installerStatus={installerStatus}
             debugEnabled={Boolean(settings.pkg_install_debug)}
@@ -1004,7 +1030,7 @@ export default function App() {
             onRemove={handleRemoveSmbShare}
             onTest={handleTestSmbConnection}
             testing={smbTesting}
-            onInstall={handleInstall}
+            onInstall={installFromLibrary}
           />
         ) : showSettings ? (
           <SettingsView
@@ -1038,8 +1064,8 @@ export default function App() {
           <TitleDetailView
             title={selectedTitle}
             onBack={handleBackToPackages}
-            onInstall={handleInstall}
-            onInstallBaseAndUpdate={handleInstallBaseAndUpdate}
+            onInstall={installFromLibrary}
+            onInstallBaseAndUpdate={installBaseAndUpdateFromLibrary}
             onOpenLeftoverCleanup={handleOpenLeftoverCleanupForTitle}
             installerStatus={installerStatus}
             storage={storage}
@@ -1050,7 +1076,7 @@ export default function App() {
         ) : selectedDrive && (settings.smb_shares || []).some((share) => share.id === selectedDrive.id && share.browse_only) ? (
           <SmbFileBrowser key={selectedDrive.id}
             share={settings.smb_shares.find((share) => share.id === selectedDrive.id)}
-            onBack={handleBackToDrives} onInstall={handleInstall} />
+            onBack={handleBackToDrives} onInstall={installFromLibrary} />
         ) : selectedDrive ? (
           <PackageGridView
             page={packagePage}

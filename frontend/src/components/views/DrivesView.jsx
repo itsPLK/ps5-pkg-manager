@@ -1,5 +1,4 @@
 import React from 'react';
-import { formatBytes } from '../../utils/formatters';
 
 const ALL_SOURCES_DRIVE = {
   id: '__all__',

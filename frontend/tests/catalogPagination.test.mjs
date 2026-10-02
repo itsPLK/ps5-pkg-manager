@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import React from 'react';
@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 const require = createRequire(import.meta.url);
 const bundle = await build({
-  entryPoints: [new URL('../src/components/views/PackageGridView.jsx', import.meta.url).pathname],
+  entryPoints: [fileURLToPath(new URL('../src/components/views/PackageGridView.jsx', import.meta.url))],
   bundle: true, write: false, format: 'esm', platform: 'node',
   plugins: [{ name: 'shared-react', setup(builder) {
     builder.onResolve({ filter: /^react$/ }, () => ({ path: pathToFileURL(require.resolve('react')).href, external: true }));

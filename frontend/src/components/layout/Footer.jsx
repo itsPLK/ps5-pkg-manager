@@ -1,6 +1,6 @@
 import React from 'react';
 import { getFullVersion } from '../../utils/title';
-import { isPlayStation, DONATE_URL } from '../../constants/config';
+import { isPlayStation } from '../../constants/config';
 
 export default function Footer({ appVersion }) {
   return (

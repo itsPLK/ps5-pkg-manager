@@ -33,6 +33,11 @@ function getBuildInfo() {
 
 const buildInfo = getBuildInfo()
 
+// Dev server backend, e.g. PKG_BACKEND=10.0.2.66:8844 npm run dev
+const backend = process.env.PKG_BACKEND || '127.0.0.1:8844'
+const backendHost = backend.replace(/:\d+$/, '')
+const wsPort = process.env.PKG_BACKEND_WS_PORT || '18842'
+
 function titlePlugin(title) {
   return {
     name: 'html-title-transform',
@@ -69,17 +74,25 @@ export default defineConfig({
     assetsInlineLimit: 10000000,
   },
   server: {
+    // PKG_NO_HMR=1 keeps code edits from resetting a page mid-install; reload to apply them.
+    hmr: process.env.PKG_NO_HMR ? false : undefined,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8844',
+        target: `http://${backend}`,
         changeOrigin: true
       },
       '/version': {
-        target: 'http://127.0.0.1:8844',
+        target: `http://${backend}`,
         changeOrigin: true
       },
       '/cache.appcache': {
-        target: 'http://127.0.0.1:8844',
+        target: `http://${backend}`,
+        changeOrigin: true
+      },
+      // Direct-install upload socket; the dev client connects same-origin.
+      '/ws/upload': {
+        target: `ws://${backendHost}:${wsPort}`,
+        ws: true,
         changeOrigin: true
       }
     }

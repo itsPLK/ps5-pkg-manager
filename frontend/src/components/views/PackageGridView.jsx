@@ -1,6 +1,6 @@
 import React from 'react';
 import BlurIcon from '../../BlurIcon';
-import { formatBytes, formatVersion } from '../../utils/formatters';
+import { formatBytes } from '../../utils/formatters';
 
 function getPlatform(titleId) {
   const normalizedTitleId = (titleId || '').trim().toUpperCase();
