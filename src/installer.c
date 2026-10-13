@@ -6,6 +6,7 @@
  */
 
 #include "installer.h"
+#include "split_pkg.h"
 #include "install_queue.h"
 #include "install_service.h"
 #include "pkg_parser.h"
@@ -796,6 +797,9 @@ static int is_usb_or_disc_path(const char *path) {
     if (!path || path[0] == '\0') return 0;
     if (strncmp(path, "smb://", 6) == 0) return 0;
     if (strncmp(path, "live:", 5) == 0) return 0;
+    /* A numbered piece set only exists as a whole through the stream server;
+     * handing piece 0 straight to the system installer would be truncated. */
+    if (split_pkg_detect(path, NULL)) return 0;
 
     const char *usb_prefix = getenv("PKG_USB_PREFIX");
     if (usb_prefix && usb_prefix[0] != '\0') {
@@ -808,6 +812,15 @@ static int is_usb_or_disc_path(const char *path) {
         if (strncmp(path, disc_dir, strlen(disc_dir)) == 0) return 1;
     }
     if (strncmp(path, "/mnt/disc", 9) == 0) return 1;
+
+    /* Internal storage source (/data/pkg) behaves like a local drive */
+    const char *internal_dir = getenv("PKG_INTERNAL_DIR");
+    if (internal_dir && internal_dir[0] != '\0') {
+        size_t ilen = strlen(internal_dir);
+        if (strncmp(path, internal_dir, ilen) == 0 &&
+            (path[ilen] == '/' || path[ilen] == '\0' || internal_dir[ilen - 1] == '/')) return 1;
+    }
+    if (strncmp(path, "/data/pkg/", 10) == 0) return 1;
 
     const char *scan_dir = getenv("PKG_SCAN_DIR");
     if (scan_dir && scan_dir[0] != '\0') {
@@ -1861,7 +1874,7 @@ int installer_init(const char *server_url) {
     int ret = sceAppInstUtilInitialize();
     if (ret != 0) {
         printf("[PKG Manager] sceAppInstUtilInitialize returned 0x%08X\n", ret);
-        ps5_notify("PKG Manager: app install service returned 0x%08X", ret);
+        ps5_notify("Internal PKG Manager: app install service returned 0x%08X", ret);
     }
 #endif
 
@@ -1940,6 +1953,24 @@ static int installer_start_internal(const char *pkg_path) {
             struct stat st;
             if (stat(pkg_path_copy, &st) == 0) {
                 detail.file_size = (uint64_t)st.st_size;
+            }
+            split_pkg_t fb_set;
+            if (split_pkg_detect(pkg_path_copy, &fb_set)) {
+                detail.file_size = fb_set.total;
+                detail.total_pkg_size = fb_set.total;
+                {
+                    /* Diagnostics: why could the header not be parsed? */
+                    unsigned char hb[64];
+                    ssize_t hn = split_pkg_pread(&fb_set, hb, sizeof(hb), 0);
+                    char hex[64 * 2 + 1];
+                    size_t hx = 0;
+                    for (ssize_t i = 0; i < hn && hx + 2 < sizeof(hex); i++)
+                        hx += (size_t)snprintf(hex + hx, sizeof(hex) - hx, "%02X", hb[i]);
+                    install_log("[INSTALLER] WARNING: piece set: %u pieces total=%llu; header unparsable, first %d bytes: %s",
+                                (unsigned)fb_set.count, (unsigned long long)fb_set.total, (int)hn, hex);
+                    for (uint32_t i = 0; i < fb_set.count; i++)
+                        install_log("[INSTALLER] WARNING: piece %u size=%llu", (unsigned)i, (unsigned long long)fb_set.size[i]);
+                }
             }
         }
     }

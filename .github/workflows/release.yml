@@ -95,6 +95,7 @@ jobs:
           PY
 
           gh release create "$TAG" \
+            --target "${{ github.sha }}" \
             --title "$TAG" \
             --notes-file release-notes.md \
             "pkg-manager_v${VERSION}.elf"

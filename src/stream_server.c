@@ -283,6 +283,23 @@ static int send_all(int fd, const void *buf, size_t len) {
 
 /* Returns 1 with out_start/out_end set for a satisfiable range,
  * 0 when no Range header is present, -1 when unsatisfiable. */
+/* Decimal parser that does not depend on the platform's strtoull (64-bit
+ * safe by construction). Parses digits at p (stopping at the first non-digit
+ * or at `limit`), saturating at UINT64_MAX. Returns the digit count. */
+static int parse_u64_dec(const char *p, const char *limit, uint64_t *out) {
+    uint64_t v = 0;
+    int n = 0;
+    while ((!limit || p < limit) && *p >= '0' && *p <= '9') {
+        uint64_t d = (uint64_t)(*p - '0');
+        if (v > (UINT64_MAX - d) / 10) v = UINT64_MAX;
+        else v = v * 10 + d;
+        p++;
+        n++;
+    }
+    *out = v;
+    return n;
+}
+
 static int find_range(const char *req, uint64_t total, uint64_t *out_start, uint64_t *out_end) {
     /* Case-insensitive "Range:" header name (RFC 9110 field names are
      * case-insensitive); MHD lookup is case-insensitive, keep parity. */
@@ -328,7 +345,8 @@ static int find_range(const char *req, uint64_t total, uint64_t *out_start, uint
     uint64_t end = (total > 0) ? (total - 1) : 0;
     if (dash == b) {
         /* Suffix range: bytes=-N (last N bytes) */
-        uint64_t suffix = strtoull(dash + 1, NULL, 10);
+        uint64_t suffix = 0;
+        parse_u64_dec(dash + 1, le, &suffix);
         if (total == 0) {
             return -1;
         }
@@ -341,7 +359,7 @@ static int find_range(const char *req, uint64_t total, uint64_t *out_start, uint
         start = total - suffix;
         end = total - 1;
     } else {
-        start = strtoull(b, NULL, 10);
+        (void)parse_u64_dec(b, dash, &start);
         if (*(dash + 1) != '\0' && (le == NULL || (dash + 1) < le)) {
             /* Only treat trailing digits on the same header line as end */
             const char *p = dash + 1;
@@ -351,7 +369,7 @@ static int find_range(const char *req, uint64_t total, uint64_t *out_start, uint
                 p++;
             }
             if (has_digit) {
-                end = strtoull(dash + 1, NULL, 10);
+                (void)parse_u64_dec(dash + 1, le, &end);
             } else {
                 end = (total > 0) ? (total - 1) : 0;
             }
@@ -772,6 +790,13 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
                     conn_id, peer, req_no, (unsigned long long)total, sres == 0 ? "ok" : strerror(errno),
                     (unsigned long long)(stream_now_ms() - t_start_ms));
         install_log("[STREAM] WARNING: raw 416 Range Not Satisfiable (total=%llu)", (unsigned long long)total);
+        {
+            char raw_rng[160] = {0};
+            int has_rng = stream_header_value(req, "Range", raw_rng, sizeof(raw_rng));
+            install_log("[STREAM] WARNING: 416 detail: method=%s Range='%s' parsed start=%llu end=%llu total=%llu", method,
+                        has_rng ? raw_rng : "<absent>", (unsigned long long)start, (unsigned long long)end,
+                        (unsigned long long)total);
+        }
         stream_debug_log_request(conn_id, req_no, peer, method, path, 1, start, end, 416, 0, total);
         return (sres == 0 && keep_wanted) ? SERVE_KEEP : SERVE_CLOSE;
     }

@@ -25,7 +25,7 @@ export default function SmbManagementView({ settings, onBack, onAdd, onEdit, onT
                 </button>
 
                 <div className="text-sm text-zinc-400 flex items-center space-x-2 min-w-0">
-                  <span className="shrink-0">PKG Manager</span>
+                  <span className="shrink-0">Internal PKG Manager</span>
                   <span className="shrink-0 text-zinc-600">&rsaquo;</span>
                   <button
                     type="button"

@@ -366,6 +366,6 @@ test('formatInstallTitle on desktop keeps compact percentage in title when insta
     appVersion: '1.4.1',
     onPS5: false,
   });
-  assert.match(title, /^\(60%\) PKG Manager/);
+  assert.match(title, /^\(60%\) Internal PKG Manager/);
 });
 

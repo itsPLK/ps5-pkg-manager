@@ -27,7 +27,7 @@ function getBuildInfo() {
     const pad = (n) => String(n).padStart(2, '0')
     return `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())} ${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:${pad(now.getUTCSeconds())} UTC`
   })()
-  const title = `PKG Manager v${version} (${commit}, ${date}) by PLK`
+  const title = `Internal PKG Manager v${version} (${commit}, ${date}) by PLK`
   return { version, commit, date, title }
 }
 

@@ -23,7 +23,7 @@ export default function SettingsView({ settings, onSaveSettings, onClose, onOpen
               </button>
 
               <div className="text-sm text-zinc-400 flex items-center space-x-2 min-w-0">
-                <span className="shrink-0">PKG Manager</span>
+                <span className="shrink-0">Internal PKG Manager</span>
                 <span className="shrink-0 text-zinc-600">&rsaquo;</span>
                 <span className="text-white font-semibold truncate">Settings</span>
               </div>
@@ -211,7 +211,7 @@ export default function SettingsView({ settings, onSaveSettings, onClose, onOpen
                   </div>
 
                   <p className="text-xs text-zinc-300 leading-relaxed">
-                    Adds a shortcut to the PS5 Media tab to launch PKG Manager directly from the home screen.
+                    Adds a shortcut to the PS5 Media tab to launch Internal PKG Manager directly from the home screen.
                   </p>
                 </div>
 
@@ -505,7 +505,7 @@ export default function SettingsView({ settings, onSaveSettings, onClose, onOpen
                   </button>
                 </div>
 
-                {/* Close PKG Manager Card */}
+                {/* Close Internal PKG Manager Card */}
                 <div className="rounded-[2px] bg-[#141520] border border-white/10 p-6 space-y-4">
                   <div className="flex items-center space-x-3 pb-3 border-b border-white/10">
                     <div className="w-10 h-10 rounded-[2px] bg-rose-600/20 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
@@ -516,13 +516,13 @@ export default function SettingsView({ settings, onSaveSettings, onClose, onOpen
                       </svg>
                     </div>
                     <div>
-                      <h3 className="text-lg font-bold text-white">Close PKG Manager</h3>
+                      <h3 className="text-lg font-bold text-white">Close Internal PKG Manager</h3>
                       <p className="text-xs text-zinc-400">Stop the server process</p>
                     </div>
                   </div>
 
                   <p className="text-xs text-zinc-300 leading-relaxed">
-                    Close PKG Manager and stop its server process.
+                    Close Internal PKG Manager and stop its server process.
                   </p>
 
                   <button
@@ -530,7 +530,7 @@ export default function SettingsView({ settings, onSaveSettings, onClose, onOpen
                     onClick={onCloseApp}
                     className="w-full py-3 px-4 rounded-[2px] ps5-focus-item bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/30 text-rose-200 text-sm font-bold transition-colors flex items-center justify-between cursor-pointer"
                   >
-                    <span>Close PKG Manager</span>
+                    <span>Close Internal PKG Manager</span>
                     <span>&rarr;</span>
                   </button>
                 </div>

@@ -861,7 +861,7 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         post_state_t *ps = (post_state_t *)*con_cls;
         if (ps) ps->shutdown_after_response = 1;
 
-        static const char response_json[] = "{\"success\":true,\"message\":\"Closing PKG Manager\"}";
+        static const char response_json[] = "{\"success\":true,\"message\":\"Closing Internal PKG Manager\"}";
         struct MHD_Response *resp = MHD_create_response_from_buffer(
             sizeof(response_json) - 1, (void *)response_json, MHD_RESPMEM_PERSISTENT);
         add_cors_headers(resp);
@@ -1487,7 +1487,7 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                      "{\"success\":true,\"message\":\"Installation canceled\"}");
         } else if (res == -2) {
             snprintf(response_buf, sizeof(response_buf),
-                     "{\"success\":false,\"error\":\"Direct storage installations cannot be canceled from PKG Manager (managed by PS5 system)\"}");
+                     "{\"success\":false,\"error\":\"Direct storage installations cannot be canceled from Internal PKG Manager (managed by PS5 system)\"}");
         } else {
             snprintf(response_buf, sizeof(response_buf),
                      "{\"success\":false,\"error\":\"No active installation to cancel\"}");

@@ -336,6 +336,63 @@ int main(void) {
     unsetenv("PKG_DISC_DIR");
 
     /* =========================================================================
+     * Test 4b: Internal storage source (/data/pkg equivalent, recursive)
+     * ========================================================================= */
+    printf("\n=== Testing Internal Storage Source (recursive, own drive entry) ===\n");
+    system("rm -rf /tmp/mock_usb* /tmp/mock_internal");
+    system("mkdir -p /tmp/mock_usb0 /tmp/mock_internal/sub/deep");
+    system("cp /tmp/test_scan_fixtures/wc.pkg /tmp/mock_internal/");
+    system("cp /tmp/test_scan_fixtures/nv.pkg /tmp/mock_internal/sub/deep/");
+    setenv("PKG_USB_PREFIX", "/tmp/mock_usb", 1);
+
+    /* Without PKG_INTERNAL_DIR the source stays off in redirected test runs */
+    pkg_scanner_init();
+    assert(pkg_scanner_scan() == 0);
+    for (size_t i = 0; i < pkg_scanner_get_drive_count(); i++) {
+        pkg_drive_t dd;
+        assert(pkg_scanner_get_drive_at(i, &dd) == 0);
+        assert(strcmp(dd.id, "internal") != 0);
+    }
+
+    setenv("PKG_INTERNAL_DIR", "/tmp/mock_internal", 1);
+    pkg_scanner_init();
+    assert(pkg_scanner_scan() == 2); /* root file + nested file, recursive */
+
+    int found_internal = 0;
+    for (size_t i = 0; i < pkg_scanner_get_drive_count(); i++) {
+        pkg_drive_t dd;
+        assert(pkg_scanner_get_drive_at(i, &dd) == 0);
+        if (strcmp(dd.id, "internal") == 0) {
+            found_internal = 1;
+            assert(strcmp(dd.type, "internal") == 0);
+            assert(strcmp(dd.path, "/tmp/mock_internal") == 0);
+            assert(dd.mounted == 1);
+            assert(dd.pkg_count == 2);
+            assert(dd.clickable == 1);
+        }
+    }
+    assert(found_internal);
+
+    char *internal_json = pkg_scanner_packages_for_drive_to_json("internal");
+    assert(strstr(internal_json, "WaveCast") != NULL);
+    assert(strstr(internal_json, "NebulaView") != NULL);
+    free(internal_json);
+
+    /* Quick rescan picks up newly added packages */
+    system("cp /tmp/test_scan_fixtures/bq_base.pkg /tmp/mock_internal/sub/");
+    int internal_changed = 0;
+    assert(pkg_scanner_scan_quick("internal", &internal_changed) == 3);
+    assert(internal_changed == 1);
+
+    /* ...and drops them when the folder disappears */
+    system("rm -rf /tmp/mock_internal");
+    assert(pkg_scanner_scan_quick("internal", &internal_changed) == 0);
+
+    system("rm -rf /tmp/mock_usb* /tmp/mock_internal");
+    unsetenv("PKG_USB_PREFIX");
+    unsetenv("PKG_INTERNAL_DIR");
+
+    /* =========================================================================
      * Test 5: Dotfile and Dot-directory Filtering (._*.pkg, .hidden.pkg, etc.)
      * ========================================================================= */
     printf("\n=== Testing Dotfile Exclusion (.dot.pkg and ._*.pkg) ===\n");

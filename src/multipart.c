@@ -6,6 +6,7 @@
  */
 
 #include "multipart.h"
+#include "split_pkg.h"
 #include "miniz.h"
 #include "smb_client.h"
 #include "installer.h"
@@ -460,6 +461,59 @@ int virtual_stream_open(const char *initial_path, virtual_stream_t *stream) {
 
     multipart_header_t hdr;
     if (multipart_read_header(local_path, &hdr) != 0) {
+        /* Plain numbered piece set (<name>_0.pkg, <name>_1.pkg, ...): serve the
+         * pieces back to back as one package. Not the PS5MPKG1 format, so
+         * is_multipart stays 0 (no disc/part prompts). */
+        split_pkg_t sp;
+        if (split_pkg_detect(local_path, &sp)) {
+            stream->is_multipart = 0;
+            stream->is_smb = 0;
+            stream->current_part = 1;
+            stream->total_parts = sp.count;
+            stream->total_pkg_size = sp.total;
+            stream->zero_pad_from = 0;
+            {
+                /* Experiment: some PSN piece sets have a header that declares
+                 * (offset + size + trailer) 64 KiB beyond the pieces on disk
+                 * and the system installer reads that block. Serve the
+                 * missing tail as zeros so the read does not fail. */
+                uint8_t hh[0x30];
+                if (split_pkg_pread(&sp, hh, sizeof(hh), 0) == (ssize_t)sizeof(hh) &&
+                    memcmp(hh, "\x7f" "FIH", 4) == 0) {
+                    uint64_t a = 0, b = 0, c = 0;
+                    for (int k = 7; k >= 0; k--) {
+                        a = (a << 8) | hh[0x10 + k];
+                        b = (b << 8) | hh[0x18 + k];
+                        c = (c << 8) | hh[0x28 + k];
+                    }
+                    uint64_t declared = a + b + c;
+                    if (a == 0x10000 && c == 0x10000 && declared > sp.total &&
+                        declared - sp.total <= 0x10000) {
+                        stream->zero_pad_from = sp.total;
+                        stream->total_pkg_size = declared;
+                        install_log("[STREAM] WARNING: piece set is %llu bytes short of its header; padding with zeros (total %llu -> %llu)",
+                                    (unsigned long long)(declared - sp.total),
+                                    (unsigned long long)sp.total, (unsigned long long)declared);
+                    }
+                }
+            }
+            for (uint32_t i = 0; i < sp.count; i++) {
+                if (split_pkg_piece_path(&sp, i, stream->parts[i].path,
+                                         sizeof(stream->parts[i].path)) != 0) {
+                    virtual_stream_close(stream);
+                    return -3;
+                }
+                stream->parts[i].start_pkg_offset = sp.start[i];
+                stream->parts[i].part_data_size = sp.size[i];
+                stream->parts[i].data_offset = 0;
+                stream->parts[i].fd = -1;
+            }
+            const char *sslash = strrchr(local_path, '/');
+            strncpy(stream->pkg_filename, sslash ? sslash + 1 : local_path,
+                    sizeof(stream->pkg_filename) - 1);
+            return 0;
+        }
+
         /* Standard single PKG file */
         stream->is_multipart = 0;
         stream->is_smb = 0;
@@ -636,6 +690,12 @@ ssize_t virtual_stream_read(virtual_stream_t *stream, uint64_t pkg_offset, void 
     /* Local path: resolve the backing fd + file range under the stream
      * lock, then transfer outside it so parallel range connections and
      * the (potentially hour-long) disc wait never block each other. */
+    if (stream->zero_pad_from && pkg_offset >= stream->zero_pad_from) {
+        size_t zn = count;
+        if (pkg_offset + zn > stream->total_pkg_size) zn = (size_t)(stream->total_pkg_size - pkg_offset);
+        memset(buf, 0, zn);
+        return (ssize_t)zn;
+    }
     int use_lock = stream->lock_inited;
     for (;;) {
         int fd = -1;
@@ -651,6 +711,9 @@ ssize_t virtual_stream_read(virtual_stream_t *stream, uint64_t pkg_offset, void 
         size_t to_read = count;
         if (pkg_offset + to_read > stream->total_pkg_size) {
             to_read = (size_t)(stream->total_pkg_size - pkg_offset);
+        }
+        if (stream->zero_pad_from && pkg_offset + to_read > stream->zero_pad_from) {
+            to_read = (size_t)(stream->zero_pad_from - pkg_offset);
         }
 
         int p_idx = -1;

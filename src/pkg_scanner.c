@@ -6,6 +6,7 @@
  */
 
 #include "pkg_scanner.h"
+#include "split_pkg.h"
 #include "pkg_cache.h"
 #include "icon_blurhash.h"
 #include "multipart.h"
@@ -748,6 +749,43 @@ static int is_package_file(const char *name) {
     return 0;
 }
 
+/* Like is_package_file(), but also hides later pieces (_1, _2, ...) of a plain
+ * numbered piece set whose piece 0 sits in the same directory: the set is
+ * listed once, as its piece 0. */
+static int is_package_file_in_dir(const char *dir, const char *name) {
+    if (!is_package_file(name)) return 0;
+    return !split_pkg_is_continuation(dir, name);
+}
+
+/* Size used for catalog bookkeeping: the whole set for piece 0 of a numbered
+ * piece set, the file's own size otherwise. */
+static uint64_t scan_effective_size(const char *path, uint64_t file_size) {
+    split_pkg_t sp;
+    if (split_pkg_detect(path, &sp)) return sp.total;
+    return file_size;
+}
+
+/* When a numbered piece set's header could not be parsed, recover the title ID
+ * and content ID from Sony's file name, e.g.
+ *   EP1457-PPSA04135_00-MB2BANNERLORD000_0.pkg */
+static void split_name_identity(const char *path, const char *filename, pkg_detail_t *d) {
+    split_pkg_t sp;
+    if (!split_pkg_detect(path, &sp)) return;
+    size_t n = strlen(filename);
+    if (n < 6 + 16) return;
+    n -= 6; /* drop "_0.pkg" */
+    if (n >= sizeof(d->content_id)) return;
+    const char *t = filename + 7;
+    if (filename[6] != '-' ) return;
+    for (int i = 0; i < 4; i++) if (t[i] < 'A' || t[i] > 'Z') return;
+    for (int i = 4; i < 9; i++) if (t[i] < '0' || t[i] > '9') return;
+    memcpy(d->content_id, filename, n);
+    d->content_id[n] = '\0';
+    memcpy(d->title_id, t, 9);
+    d->title_id[9] = '\0';
+    snprintf(d->title_name, sizeof(d->title_name), "%s", d->title_id);
+}
+
 static int is_drive_mounted(const char *path) {
     if (!path || path[0] == '\0') return 0;
     struct stat st;
@@ -773,6 +811,33 @@ static int is_drive_mounted(const char *path) {
 #endif
 }
 
+/* Internal console storage source. Packages placed under /data/pkg (searched
+ * recursively) show up as their own "Internal Storage" source next to USB and
+ * disc. /data is never a separate mount point, so presence of the directory
+ * is the only check that makes sense (unlike is_drive_mounted()). */
+#define INTERNAL_PKG_DIR_DEFAULT "/data/pkg"
+#define INTERNAL_DRIVE_ID        "internal"
+#define INTERNAL_DRIVE_LABEL     "Internal Storage"
+#define INTERNAL_DRIVE_TYPE      "internal"
+
+/* Returns the internal package directory, or NULL when the source is disabled.
+ * PKG_INTERNAL_DIR overrides the default. Test/dev runs that redirect the USB
+ * or disc locations skip the real /data/pkg unless it is overridden. */
+static const char *internal_pkg_dir(void) {
+    const char *dir = getenv("PKG_INTERNAL_DIR");
+    if (dir && dir[0] != '\0') return dir;
+    if (getenv("PKG_SCAN_DIR") || getenv("PKG_USB_PREFIX") || getenv("PKG_DISC_DIR")) {
+        return NULL;
+    }
+    return INTERNAL_PKG_DIR_DEFAULT;
+}
+
+static int is_internal_dir_present(const char *path) {
+    if (!path || path[0] == '\0') return 0;
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
 static size_t count_pkg_files(const char *dir_path, int recursive, int depth) {
     if (depth > 5) return 0;
     DIR *d = opendir(dir_path);
@@ -789,7 +854,7 @@ static size_t count_pkg_files(const char *dir_path, int recursive, int depth) {
         struct stat st;
         if (stat(full_path, &st) != 0) continue;
 
-        if (S_ISREG(st.st_mode) && is_package_file(entry->d_name)) {
+        if (S_ISREG(st.st_mode) && is_package_file_in_dir(dir_path, entry->d_name)) {
             count++;
         } else if (S_ISDIR(st.st_mode) && recursive) {
             count += count_pkg_files(full_path, 1, depth + 1);
@@ -874,6 +939,7 @@ static int parse_pkg_entry(const char *full_path, const char *filename,
         out_detail->total_pkg_size = file_size;
         out_detail->mtime = mtime;
         out_detail->is_valid = 1;
+        split_name_identity(full_path, filename, out_detail);
     }
 
     return (!out_detail->is_multipart || out_detail->part_index == 1) ? 0 : 1;
@@ -881,8 +947,9 @@ static int parse_pkg_entry(const char *full_path, const char *filename,
 
 static void process_pkg_file(const char *full_path, const char *filename,
                              const struct stat *st, const char *drive_label) {
+    uint64_t eff_size = scan_effective_size(full_path, (uint64_t)st->st_size);
     pthread_mutex_lock(&g_scanner_mutex);
-    add_scanned_file_locked(full_path, (uint64_t)st->st_size, (uint64_t)st->st_mtime);
+    add_scanned_file_locked(full_path, eff_size, (uint64_t)st->st_mtime);
     pthread_mutex_unlock(&g_scanner_mutex);
 
     pthread_mutex_lock(&g_scan_status_mutex);
@@ -900,7 +967,7 @@ static void process_pkg_file(const char *full_path, const char *filename,
     }
 
     pkg_detail_t detail;
-    int rc = parse_pkg_entry(full_path, filename, (uint64_t)st->st_size, (uint64_t)st->st_mtime, &detail);
+    int rc = parse_pkg_entry(full_path, filename, eff_size, (uint64_t)st->st_mtime, &detail);
     if (rc == 0) {
         pthread_mutex_lock(&g_scanner_mutex);
         memcpy(&g_packages[g_package_count++], &detail, sizeof(pkg_detail_t));
@@ -997,7 +1064,7 @@ static size_t scan_dir_root(const char *dir_path, const char *drive_label) {
             continue;
         }
 
-        if (S_ISREG(st.st_mode) && is_package_file(entry->d_name)) {
+        if (S_ISREG(st.st_mode) && is_package_file_in_dir(dir_path, entry->d_name)) {
             process_pkg_file(full_path, entry->d_name, &st, drive_label);
         }
     }
@@ -1026,7 +1093,7 @@ static void scan_dir_recursive(const char *dir_path, int depth, const char *driv
 
         if (S_ISDIR(st.st_mode)) {
             scan_dir_recursive(full_path, depth + 1, drive_label);
-        } else if (S_ISREG(st.st_mode) && is_package_file(entry->d_name)) {
+        } else if (S_ISREG(st.st_mode) && is_package_file_in_dir(dir_path, entry->d_name)) {
             process_pkg_file(full_path, entry->d_name, &st, drive_label);
         }
     }
@@ -1127,6 +1194,11 @@ static int scan_full_owned(void) {
         }
     }
 
+    const char *internal_dir = internal_pkg_dir();
+    if (internal_dir && is_internal_dir_present(internal_dir)) {
+        total_expected += count_pkg_files(internal_dir, 1, 0);
+    }
+
     /* Pre-count .pkg files across all enabled SMB shares (readdir only,
        no parsing) so progress reflects real totals (e.g. 1/15, not 7/7). */
     {
@@ -1207,7 +1279,16 @@ static int scan_full_owned(void) {
         }
     }
 
-    /* 3. Check configured SMB shares */
+    /* 3. Check internal storage (/data/pkg, recursive) */
+    if (internal_dir && is_internal_dir_present(internal_dir)) {
+        size_t prev_pkg = g_package_count;
+        scan_dir_recursive(internal_dir, 0, INTERNAL_DRIVE_LABEL);
+        size_t count = g_package_count - prev_pkg;
+        add_full_scan_drive(INTERNAL_DRIVE_ID, INTERNAL_DRIVE_LABEL, internal_dir,
+                            INTERNAL_DRIVE_TYPE, 1, count);
+    }
+
+    /* 4. Check configured SMB shares */
     app_settings_t smb_settings;
     pkg_cache_get_settings(&smb_settings);
     for (int i = 0; i < smb_settings.smb_share_count; i++) {
@@ -1319,7 +1400,7 @@ static void collect_local_files_quick(const char *dir_path, int recursive, int d
 
         if (S_ISDIR(st.st_mode) && recursive) {
             collect_local_files_quick(full_path, 1, depth + 1, list);
-        } else if (S_ISREG(st.st_mode) && is_package_file(entry->d_name)) {
+        } else if (S_ISREG(st.st_mode) && is_package_file_in_dir(dir_path, entry->d_name)) {
             if (list->count >= list->capacity) {
                 size_t new_cap = list->capacity == 0 ? 32 : list->capacity * 2;
                 quick_file_entry_t *new_arr = (quick_file_entry_t *)realloc(list->entries, new_cap * sizeof(quick_file_entry_t));
@@ -1336,7 +1417,7 @@ static void collect_local_files_quick(const char *dir_path, int recursive, int d
             e->path[sizeof(e->path) - 1] = '\0';
             strncpy(e->filename, entry->d_name, sizeof(e->filename) - 1);
             e->filename[sizeof(e->filename) - 1] = '\0';
-            e->file_size = (uint64_t)st.st_size;
+            e->file_size = scan_effective_size(full_path, (uint64_t)st.st_size);
             e->mtime = (uint64_t)st.st_mtime;
         }
     }
@@ -1381,7 +1462,8 @@ static int scan_quick_single_source(const char *drive_id, const char *drive_labe
             return 0;
         }
     } else {
-        if (!is_drive_mounted(drive_path)) {
+        int is_internal = (strcmp(drive_type, INTERNAL_DRIVE_TYPE) == 0);
+        if (is_internal ? !is_internal_dir_present(drive_path) : !is_drive_mounted(drive_path)) {
             pthread_mutex_lock(&g_scanner_mutex);
             int had_pkgs = 0;
             size_t write_idx = 0;
@@ -1414,7 +1496,10 @@ static int scan_quick_single_source(const char *drive_id, const char *drive_labe
         }
 
         const char *env_dir = getenv("PKG_SCAN_DIR");
-        if (env_dir && strcmp(drive_path, env_dir) == 0) {
+        if (is_internal) {
+            /* Internal storage: the whole /data/pkg tree, recursive */
+            collect_local_files_quick(drive_path, 1, 0, &cur_files);
+        } else if (env_dir && strcmp(drive_path, env_dir) == 0) {
             collect_local_files_quick(env_dir, 1, 0, &cur_files);
         } else {
             /* Root non-recursive */
@@ -1742,6 +1827,16 @@ int pkg_scanner_scan_quick(const char *drive_id_or_path, int *out_changed) {
         }
     }
 
+    /* Check internal storage (/data/pkg) */
+    const char *internal_dir = internal_pkg_dir();
+    if (internal_dir) {
+        if (!drive_id_or_path || drive_id_or_path[0] == '\0' || strcmp(drive_id_or_path, "__all__") == 0 ||
+            strcmp(drive_id_or_path, INTERNAL_DRIVE_ID) == 0 || strcmp(drive_id_or_path, internal_dir) == 0) {
+            total_changed += scan_quick_single_source(INTERNAL_DRIVE_ID, INTERNAL_DRIVE_LABEL, internal_dir,
+                                                      INTERNAL_DRIVE_TYPE, 0, NULL);
+        }
+    }
+
     /* Check SMB shares */
     for (int i = 0; i < smb_settings.smb_share_count; i++) {
         const smb_share_config_t *scfg = &smb_settings.smb_shares[i];
@@ -1958,6 +2053,15 @@ int pkg_scanner_find_part_ex(const uint8_t *package_uuid, const char *pkg_filena
             if (scan_find_part_in_location(usb_path, package_uuid, pkg_filename, part_index, out_path, out_max, out_detected_part) == 0) {
                 return 0;
             }
+        }
+    }
+
+    /* Internal storage: all of /data/pkg, recursive */
+    const char *internal_dir = internal_pkg_dir();
+    if (internal_dir && is_internal_dir_present(internal_dir)) {
+        if (scan_find_part_recursive(internal_dir, 0, package_uuid, pkg_filename, part_index,
+                                     out_path, out_max, out_detected_part) == 0) {
+            return 0;
         }
     }
 

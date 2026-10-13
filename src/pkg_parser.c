@@ -7,6 +7,7 @@
 
 #include "pkg_parser.h"
 #include "multipart.h"
+#include "split_pkg.h"
 #include "smb_client.h"
 
 #include <stdio.h>
@@ -107,9 +108,22 @@ uint32_t pkg_parser_read_sdk(pkg_parser_read_fn read_fn, void *ctx,
     return main_count == 1 ? sdk : 0;
 }
 
+/* pread() that reads through a numbered piece set (see split_pkg.h) when one
+ * is supplied, so offsets beyond the first piece resolve like a single file. */
+static ssize_t sp_pread(const split_pkg_t *ss, int fd, void *buf, size_t n, off_t off) {
+    if (ss) return split_pkg_pread(ss, buf, n, (uint64_t)off);
+    return pread(fd, buf, n, off);
+}
+
+typedef struct {
+    const split_pkg_t *ss;
+    int fd;
+} sdk_read_ctx_t;
+
 static int sdk_file_read(void *ctx, uint64_t offset, void *buf, size_t size) {
     if (offset > INT64_MAX) return -1;
-    return pread(*(int *)ctx, buf, size, (off_t)offset) == (ssize_t)size ? 0 : -1;
+    const sdk_read_ctx_t *c = (const sdk_read_ctx_t *)ctx;
+    return sp_pread(c->ss, c->fd, buf, size, (off_t)offset) == (ssize_t)size ? 0 : -1;
 }
 
 uint32_t pkg_parser_read_image_sdk(pkg_parser_read_fn read_fn, void *ctx,
@@ -861,8 +875,18 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
         out->mtime = (uint64_t)st.st_mtime;
     }
 
+    /* Piece 0 of a plain numbered set (<name>_0.pkg, <name>_1.pkg, ...): treat
+     * the whole set as one file for every size check and read below. */
+    split_pkg_t split_set;
+    const split_pkg_t *ssp = NULL;
+    if (split_pkg_detect(file_path, &split_set)) {
+        ssp = &split_set;
+        out->file_size = split_set.total;
+        out->total_pkg_size = split_set.total;
+    }
+
     uint8_t hdr[0x200];
-    ssize_t hdr_read = pread(fd, hdr, sizeof(hdr), 0);
+    ssize_t hdr_read = sp_pread(ssp, fd, hdr, sizeof(hdr), 0);
     if (hdr_read < 0x80) {
         close(fd);
         return -1;
@@ -871,7 +895,7 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
     /* Check for multi-part archive format (PS5MPKG1) */
     if (hdr_read >= MULTIPART_MAGIC_LEN && memcmp(hdr, MULTIPART_MAGIC, MULTIPART_MAGIC_LEN) == 0) {
         multipart_header_t mhdr;
-        if (pread(fd, &mhdr, sizeof(mhdr), 0) == sizeof(mhdr) && multipart_is_valid_header(&mhdr)) {
+        if (sp_pread(ssp, fd, &mhdr, sizeof(mhdr), 0) == sizeof(mhdr) && multipart_is_valid_header(&mhdr)) {
             close(fd);
             /* Disk-controlled strings may lack NUL termination: force it
              * before any strcmp/strncpy to avoid OOB stack reads. */
@@ -952,7 +976,7 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
         uint8_t magic[4];
         if (read_le16(hdr + 6) == 1 && cand >= 0x80 &&
             sdk_range(cand, 0x80, out->file_size) &&
-            pread(fd, magic, sizeof(magic), (off_t)cand) == sizeof(magic) &&
+            sp_pread(ssp, fd, magic, sizeof(magic), (off_t)cand) == sizeof(magic) &&
             memcmp(magic, "\x7f" "CNT", 4) == 0) {
             cnt_offset = cand;
             cnt_found = 1;
@@ -966,7 +990,7 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
         uint64_t cand = read_le64(hdr + 0x58);
         if (cand > 0 && cand < out->file_size) {
             uint8_t test_magic[4];
-            if (pread(fd, test_magic, 4, cand) == 4 && memcmp(test_magic, "\x7f" "CNT", 4) == 0) {
+            if (sp_pread(ssp, fd, test_magic, 4, cand) == 4 && memcmp(test_magic, "\x7f" "CNT", 4) == 0) {
                 cnt_offset = cand;
                 cnt_found = 1;
             }
@@ -978,7 +1002,7 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
                 cand = read_le64(hdr + off);
                 if (cand >= 0x10000 && cand < out->file_size && (cand % 0x1000) == 0) {
                     uint8_t test_magic[4];
-                    if (pread(fd, test_magic, 4, cand) == 4 && memcmp(test_magic, "\x7f" "CNT", 4) == 0) {
+                    if (sp_pread(ssp, fd, test_magic, 4, cand) == 4 && memcmp(test_magic, "\x7f" "CNT", 4) == 0) {
                         cnt_offset = cand;
                         cnt_found = 1;
                         break;
@@ -995,7 +1019,7 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
 
     /* Read CNT Header */
     uint8_t cnt_hdr[0x80];
-    if (pread(fd, cnt_hdr, sizeof(cnt_hdr), cnt_offset) != sizeof(cnt_hdr)) {
+    if (sp_pread(ssp, fd, cnt_hdr, sizeof(cnt_hdr), cnt_offset) != sizeof(cnt_hdr)) {
         close(fd);
         return -1;
     }
@@ -1039,7 +1063,7 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
         return -1;
     }
 
-    if (pread(fd, entry_table, table_size, cnt_offset + table_offset) != (ssize_t)table_size) {
+    if (sp_pread(ssp, fd, entry_table, table_size, cnt_offset + table_offset) != (ssize_t)table_size) {
         free(entry_table);
         close(fd);
         return -1;
@@ -1062,7 +1086,7 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
     if (str_table_sz > 0 && str_table_sz < 65536) {
         str_table = (char *)malloc(str_table_sz + 1);
         if (str_table) {
-            if (pread(fd, str_table, str_table_sz, cnt_offset + str_table_off) == (ssize_t)str_table_sz) {
+            if (sp_pread(ssp, fd, str_table, str_table_sz, cnt_offset + str_table_off) == (ssize_t)str_table_sz) {
                 str_table[str_table_sz] = '\0';
             } else {
                 free(str_table);
@@ -1101,7 +1125,7 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
         if ((type == 0x2000 || strcmp(name, "param.json") == 0) && data_sz > 0 && data_sz < 262144) {
             char *json_buf = (char *)malloc(data_sz + 1);
             if (json_buf) {
-                if (pread(fd, json_buf, data_sz, cnt_offset + data_off) == (ssize_t)data_sz) {
+                if (sp_pread(ssp, fd, json_buf, data_sz, cnt_offset + data_off) == (ssize_t)data_sz) {
                     json_buf[data_sz] = '\0';
                     if (json_has_key(json_buf, data_sz, "applicationDrmType") ||
                         json_has_key(json_buf, data_sz, "applicationCategoryType") ||
@@ -1124,7 +1148,7 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
         if ((type == 0x1000 || strcmp(name, "param.sfo") == 0) && data_sz > 0 && data_sz < 262144) {
             uint8_t *sfo_buf = (uint8_t *)malloc(data_sz);
             if (sfo_buf) {
-                if (pread(fd, sfo_buf, data_sz, cnt_offset + data_off) == (ssize_t)data_sz) {
+                if (sp_pread(ssp, fd, sfo_buf, data_sz, cnt_offset + data_off) == (ssize_t)data_sz) {
                     char stitle[PKG_TITLE_NAME_LEN] = {0};
                     char stid[PKG_TITLE_ID_LEN] = {0};
                     char sver[32] = {0};
@@ -1234,7 +1258,8 @@ int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
     }
 
     if (strncmp(out->title_id, "PPSA", 4) == 0) {
-        out->sdk_version = pkg_parser_read_image_sdk(sdk_file_read, &fd, hdr, cnt_offset);
+        sdk_read_ctx_t sdk_ctx = { ssp, fd };
+        out->sdk_version = pkg_parser_read_image_sdk(sdk_file_read, &sdk_ctx, hdr, cnt_offset);
     }
     close(fd);
     out->is_valid = 1;
@@ -1666,11 +1691,15 @@ int pkg_parser_get_icon(const char *file_path, uint64_t offset, uint32_t size,
         return -1;
     }
 
+    split_pkg_t icon_set;
+    const split_pkg_t *icon_ssp = split_pkg_detect(file_path, &icon_set) ? &icon_set : NULL;
+
     struct stat st_icon;
     if (fstat(fd, &st_icon) == 0) {
-        if (st_icon.st_size <= 0 ||
-            offset >= (uint64_t)st_icon.st_size ||
-            (uint64_t)size > (uint64_t)st_icon.st_size - offset) {
+        uint64_t limit = icon_ssp ? icon_ssp->total : (uint64_t)st_icon.st_size;
+        if (limit == 0 ||
+            offset >= limit ||
+            (uint64_t)size > limit - offset) {
             close(fd);
             return -1;
         }
@@ -1682,7 +1711,7 @@ int pkg_parser_get_icon(const char *file_path, uint64_t offset, uint32_t size,
         return -1;
     }
 
-    if (pread(fd, data, size, offset) != (ssize_t)size) {
+    if (sp_pread(icon_ssp, fd, data, size, (off_t)offset) != (ssize_t)size) {
         free(data);
         close(fd);
         return -1;

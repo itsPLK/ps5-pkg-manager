@@ -29,7 +29,7 @@ export default function Header({ appVersion, storage, showSettings, showSmbPage,
               </svg>
             </div>
             <h1 className="text-lg font-bold tracking-wide text-white">
-              PKG Manager
+              Internal PKG Manager
             </h1>
           </div>
 

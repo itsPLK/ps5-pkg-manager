@@ -86,6 +86,8 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                             ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
                             : selectedTitle.sourceType === 'disc'
                             ? 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+                            : selectedTitle.sourceType === 'internal'
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
                             : 'bg-blue-500/20 text-blue-300 border-blue-500/30'
                         }`}>
                           {selectedTitle.sourceName}

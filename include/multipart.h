@@ -63,6 +63,7 @@ typedef struct {
     int is_multipart;
     int is_smb;
     int is_live;           /* NEW: RAM live session (ws_stream.c), no file */
+    uint64_t zero_pad_from; /* >0: bytes from here to total_pkg_size read as zeros (piece sets) */
     void *live;            /* ws_stream session handle (global singleton) */
     void *smb_session;
     uint32_t current_part;

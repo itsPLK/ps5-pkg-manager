@@ -36,5 +36,5 @@ export async function closeManager() {
     }
   }
 
-  throw new Error('PKG Manager is still responding after the close request.');
+  throw new Error('Internal PKG Manager is still responding after the close request.');
 }

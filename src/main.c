@@ -146,7 +146,7 @@ int main(int argc, char **argv) {
     while ((old_pid = find_pid("pkgmgr.elf")) > 0) {
         if (kill(old_pid, SIGKILL)) {
             printf("[PKG Manager] kill failed\n");
-            ps5_notify("PKG Manager: could not stop previous process (%d)", (int)old_pid);
+            ps5_notify("Internal PKG Manager: could not stop previous process (%d)", (int)old_pid);
             return EXIT_FAILURE;
         }
         sleep(1);
@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
         printf("[PKG Manager] Network controller initialized.\n");
     } else {
         printf("[PKG Manager] sceNetCtlInit returned 0x%08X\n", net_result);
-        ps5_notify("PKG Manager: network init returned 0x%08X", net_result);
+        ps5_notify("Internal PKG Manager: network init returned 0x%08X", net_result);
     }
     int user_prio = 256;
     int user_result = sceUserServiceInitialize(&user_prio);
@@ -179,12 +179,12 @@ int main(int argc, char **argv) {
         printf("[PKG Manager] User service initialized.\n");
     } else {
         printf("[PKG Manager] sceUserServiceInitialize returned 0x%08X\n", user_result);
-        ps5_notify("PKG Manager: user service init returned 0x%08X", user_result);
+        ps5_notify("Internal PKG Manager: user service init returned 0x%08X", user_result);
     }
 #endif
     static const char services_done[] = "[PKG Manager] service initialization complete\n";
     (void)write(STDOUT_FILENO, services_done, sizeof(services_done) - 1);
-    ps5_notify("PKG Manager v%s starting...", PKGMGR_VERSION);
+    ps5_notify("Internal PKG Manager v%s starting...", PKGMGR_VERSION);
 
     int port = DEFAULT_HTTP_PORT;
     char server_url[128];
@@ -193,7 +193,7 @@ int main(int argc, char **argv) {
     printf("[PKG Manager] Initializing installer subsystem...\n");
     if (installer_init(server_url) != 0) {
         fprintf(stderr, "[PKG Manager] Failed to initialize installer subsystem!\n");
-        ps5_notify("PKG Manager: installer initialization failed");
+        ps5_notify("Internal PKG Manager: installer initialization failed");
         return 1;
     }
     install_log("[PKG Manager] Starting PKG Manager v%s (%s, %s)...",
@@ -205,7 +205,7 @@ int main(int argc, char **argv) {
     printf("[PKG Manager] Starting HTTP server on port %d...\n", port);
     if (http_server_start(port) != 0) {
         fprintf(stderr, "[PKG Manager] Failed to start HTTP server on port %d!\n", port);
-        ps5_notify("PKG Manager: HTTP server failed to start on port %d", port);
+        ps5_notify("Internal PKG Manager: HTTP server failed to start on port %d", port);
         installer_shutdown();
         return 1;
     }
@@ -220,7 +220,7 @@ int main(int argc, char **argv) {
         found_count = (int)pkg_scanner_get_count();
         printf("[PKG Manager] Loaded %d package(s) on startup from cache manifest.\n", found_count);
     } else {
-        ps5_notify("PKG Manager: server ready on port %d; scanning packages...", port);
+        ps5_notify("Internal PKG Manager: server ready on port %d; scanning packages...", port);
         found_count = pkg_scanner_scan();
         printf("[PKG Manager] Initial scan found %d package(s) on startup.\n", found_count);
     }
@@ -231,10 +231,10 @@ int main(int argc, char **argv) {
     }
 
     if (strcmp(current_ip, "unknown") != 0) {
-        ps5_notify("PKG Manager v%s\nFound %d package(s)\nhttp://%s:%d",
+        ps5_notify("Internal PKG Manager v%s\nFound %d package(s)\nhttp://%s:%d",
                    PKGMGR_VERSION, found_count, current_ip, port);
     } else {
-        ps5_notify("PKG Manager v%s\nFound %d package(s)\nPort: %d",
+        ps5_notify("Internal PKG Manager v%s\nFound %d package(s)\nPort: %d",
                    PKGMGR_VERSION, found_count, port);
     }
 
@@ -276,7 +276,7 @@ int main(int argc, char **argv) {
             } else {
                 printf("[PKG Manager] !!! Failed to restart server after standby!\n");
                 install_log("[PKG Manager] !!! Failed to restart server after standby!");
-                ps5_notify("PKG Manager: Server restart failed after standby");
+                ps5_notify("Internal PKG Manager: Server restart failed after standby");
                 strcpy(current_ip, "unknown");
             }
             /* Reset timer so we don't immediately re-check */
@@ -323,7 +323,7 @@ int main(int argc, char **argv) {
                 } else {
                     printf("[PKG Manager] !!! Failed to restart server after network loss!\n");
                     install_log("[PKG Manager] !!! Failed to restart server after network loss!");
-                    ps5_notify("PKG Manager: Server restart failed");
+                    ps5_notify("Internal PKG Manager: Server restart failed");
                 }
             }
         }

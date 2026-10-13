@@ -203,6 +203,8 @@ export default function PackageGridView({ groupedTitles, searchQuery, onSearch, 
                                   ? 'bg-cyan-950/85 text-cyan-300 border-cyan-500/50'
                                   : group.sourceType === 'disc'
                                   ? 'bg-purple-950/85 text-purple-300 border-purple-500/50'
+                                  : group.sourceType === 'internal'
+                                  ? 'bg-emerald-950/85 text-emerald-300 border-emerald-500/50'
                                   : 'bg-zinc-800 text-zinc-300 border-white/20'
                               }`}>
                                 {group.sourceName}

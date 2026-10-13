@@ -24,7 +24,7 @@ CFLAGS="-O0 -Iinclude -Itests -Ideps/libsmb2/include -Ideps/libsmb2/include/smb2
 echo "=== Building WS push simulator -> ${OUT} ==="
 "${CC}" ${CFLAGS} -o "${OUT}" \
     tools/ws_push_sim.c \
-    src/multipart.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c \
+    src/multipart.c src/split_pkg.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c \
     src/miniz.c src/smb_client.c src/installer.c src/stream_server.c \
     src/stream_debug_log.c src/notification.c src/app_info.c \
     src/icon_blurhash.c src/leftovers.c src/app_diag.c src/app_installer.c \

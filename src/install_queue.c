@@ -5,6 +5,7 @@
 #include "pkg_scanner.h"
 #include "app_info.h"
 #include "ws_upload.h"
+#include "split_pkg.h"
 #include "sqlite3.h"
 #include <pthread.h>
 #include <stdio.h>
@@ -519,6 +520,11 @@ static void tick(void) {
     pkg_detail_t pkg;
     package_from_request(&snapshot.request, &pkg);
     int parse_rc = snapshot.request.owner[0] ? 0 : pkg_parser_parse(snapshot.request.path, &pkg);
+    if (parse_rc && split_pkg_detect(snapshot.request.path, NULL)) {
+        /* Numbered piece set whose header could not be parsed: keep the scanner's
+         * name-derived metadata (already in pkg) and let the installer stream it. */
+        parse_rc = 0;
+    }
     pkg_install_eligibility_t eligibility = {0};
     if (!parse_rc) pkg_scanner_check_install_eligibility(&pkg, &eligibility);
     int installed = !parse_rc && app_info_check_installed(pkg.title_id, NULL, 0);

@@ -7,16 +7,16 @@ export function getBrowserTitle(ver) {
   const raw = ver || BUILD_VERSION;
   const v = String(raw).trim().replace(/^v+/i, '') || BUILD_VERSION;
   if (BUILD_COMMIT && BUILD_DATE) {
-    return `PKG Manager v${v} (${BUILD_COMMIT}, ${BUILD_DATE}) by PLK`;
+    return `Internal PKG Manager v${v} (${BUILD_COMMIT}, ${BUILD_DATE}) by PLK`;
   }
   const titleToCheck = initialDocTitle || (typeof document !== 'undefined' ? document.title : '');
   if (titleToCheck) {
     const match = titleToCheck.match(/\(([^,]+),\s*([^)]+)\)/);
     if (match) {
-      return `PKG Manager v${v} (${match[1]}, ${match[2]}) by PLK`;
+      return `Internal PKG Manager v${v} (${match[1]}, ${match[2]}) by PLK`;
     }
   }
-  return `PKG Manager v${v} by PLK`;
+  return `Internal PKG Manager v${v} by PLK`;
 }
 
 export function makeTextProgressBar(percent, length = 10) {
@@ -87,18 +87,18 @@ export function getFullVersion(ver) {
   const raw = ver || BUILD_VERSION;
   const v = String(raw).trim().replace(/^v+/i, '') || BUILD_VERSION;
   if (BUILD_COMMIT && BUILD_DATE) {
-    return `PKG Manager v${v} (${BUILD_COMMIT}, ${BUILD_DATE})`;
+    return `Internal PKG Manager v${v} (${BUILD_COMMIT}, ${BUILD_DATE})`;
   }
   if (typeof document !== 'undefined' && document.title) {
     const match = document.title.match(/\(([^,]+),\s*([^)]+)\)/);
     if (match) {
-      return `PKG Manager v${v} (${match[1]}, ${match[2]})`;
+      return `Internal PKG Manager v${v} (${match[1]}, ${match[2]})`;
     }
   }
   if (BUILD_COMMIT) {
-    return `PKG Manager v${v} (${BUILD_COMMIT})`;
+    return `Internal PKG Manager v${v} (${BUILD_COMMIT})`;
   }
-  return `PKG Manager v${v}`;
+  return `Internal PKG Manager v${v}`;
 }
 
 export function getLocalizedTitle(pkg) {

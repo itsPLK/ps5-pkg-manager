@@ -78,7 +78,7 @@ export function useSettings(props) {
     try {
       const data = await apiInstallShortcut();
       if (data.success) {
-        showToast('PKG Manager shortcut installed to Media tab!', 'success');
+        showToast('Internal PKG Manager shortcut installed to Media tab!', 'success');
       } else {
         showToast('Failed to install home screen shortcut.', 'error');
       }

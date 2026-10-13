@@ -21,6 +21,15 @@ export function getSourceInfo(pkgPath, drivesList = []) {
     };
   }
 
+  // Check Internal storage: /data/pkg
+  if (pkgPath.match(/^\/data\/pkg(\/|$)/i)) {
+    return {
+      id: 'internal',
+      name: 'Internal',
+      type: 'internal'
+    };
+  }
+
   // Check SMB: smb://...
   if (pkgPath.startsWith('smb://')) {
     let matchedDrive = null;

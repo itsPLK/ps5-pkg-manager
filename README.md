@@ -1,7 +1,7 @@
 <p align="center">
   <img src="./assets/icon0.png" width="128" />
 </p>
-<h1 align="center">PKG Manager</h1>
+<h1 align="center">Internal PKG Manager</h1>
 
 <p align="center">A clean and intuitive package manager for PlayStation 5. Browse and install your packages directly from USB drives or over your local network (Samba/SMB), with support for multi-part packages.</p>
 
@@ -30,7 +30,7 @@ Download and launch PKG Manager from the default repository in [Payload Manager]
 
 ### Manual ELF Loading
 
-Alternatively, download the ELF from [Releases](https://github.com/itsPLK/ps5-pkg-manager/releases) and load it with elfldr.
+Alternatively, download the ELF from [Releases](https://github.com/codloverproplayer-cyber/internal-ps5-pkg-manager/releases) and load it with elfldr.
 
 ## Usage
 
@@ -43,6 +43,8 @@ Once running, open the interface in either of the following ways:
 When using a USB drive or optical disc, packages are detected in:
 - The **root** directory of the drive (nested folders in root are not scanned).
 - The **/pkg/** directory, where nested subdirectories are also scanned (e.g. `/pkg/homebrew/`).
+
+Packages stored on the console itself are detected in **/data/pkg/** (shown as **Internal Storage**), where nested subdirectories are scanned too.
 
 ### Network Shares (Samba / SMB)
 You can configure SMB network shares in **Settings → Samba** to browse and

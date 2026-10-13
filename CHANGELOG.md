@@ -1,5 +1,37 @@
 # Changelog
 
+## v1.5.1-internal2
+
+- Internal edition on top of 1.5.1-datapkg6: all /data/pkg, numbered-piece-set and stream fixes from main.
+
+## v1.5.1-internal
+
+- Added an "Internal Storage" source that scans `/data/pkg` (including nested subfolders) alongside USB drives and discs
+- Packages in `/data/pkg` install directly from console storage and support multi-part packages
+- Renamed the app to "Internal PKG Manager" (home screen tile, web UI, notifications) and gave the icon a green hue
+## v1.5.1-datapkg6
+
+- Piece sets whose header declares a 64 KiB tail beyond the pieces on disk are padded with zeros in the stream (experimental).
+
+## v1.5.1-datapkg5
+
+- Stream server: parse Range numbers with a built-in 64-bit decimal parser (no libc strtoull); persist the 416 detail line in install.log.
+
+## v1.5.1-datapkg4
+
+- Diagnostics: log the requested range on HTTP 416, and the first bytes and piece sizes of a numbered piece set whose header cannot be parsed.
+
+## v1.5.1-datapkg3
+
+- Install queue: a numbered piece set (`_0.pkg`, `_1.pkg`, ...) whose header cannot be parsed is no longer rejected as "source unavailable"; it is streamed using name-derived metadata.
+
+## v1.5.1-datapkg2
+
+- Added support for plain numbered piece sets (`<name>_0.pkg`, `<name>_1.pkg`, ...), such as large PSN downloads. The pieces are listed once, as their first piece, and installed as one package without copying or joining them first
+- If the first piece's header can't be read, the title ID is taken from the file name instead of showing "Unknown Package"
+
+---
+
 ## v1.5.1
 
 - Added support for PS5 backport patches that previously appeared as unknown packages

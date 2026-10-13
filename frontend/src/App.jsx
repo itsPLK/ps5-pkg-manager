@@ -752,7 +752,7 @@ export default function App() {
               <path d="M5 12l4 4L19 6" />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold">PKG Manager is closed</h1>
+          <h1 className="text-2xl font-bold">Internal PKG Manager is closed</h1>
           <p className="text-sm text-zinc-300">The server process has stopped. You can close this tab.</p>
         </div>
       </div>
@@ -884,13 +884,13 @@ export default function App() {
             onOpenSmb={handleOpenSmb}
             onInstallShortcut={handleInstallShortcut}
             onCloseApp={async () => {
-              if (!window.confirm('Close PKG Manager? This will stop its server process.')) return;
+              if (!window.confirm('Close Internal PKG Manager? This will stop its server process.')) return;
               try {
                 const result = await closeManager();
                 if (result?.success) setIsClosing(true);
-                else showToast('PKG Manager did not accept the close request.', 'error');
+                else showToast('Internal PKG Manager did not accept the close request.', 'error');
               } catch (err) {
-                showToast('Failed to close PKG Manager: ' + err.message, 'error');
+                showToast('Failed to close Internal PKG Manager: ' + err.message, 'error');
               }
             }}
             installingShortcut={installingShortcut}
